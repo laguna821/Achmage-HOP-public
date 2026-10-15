@@ -1,0 +1,177 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hop-workbench <hop@localhost>
+Date: Thu, 15 Oct 2026 17:36:31 +0900
+Subject: [PATCH 08/12] hop-empty-anchor-table-outer-bottom
+
+
+diff --git a/src/renderer/layout.rs b/src/renderer/layout.rs
+index 6ee65a450d406cebdcd9c4d2037e64d5d0102ffd..6775a8e062e7561ed743dc34959e0fac38736ad1 100644
+--- a/src/renderer/layout.rs
++++ b/src/renderer/layout.rs
+@@ -12690,7 +12690,22 @@ impl LayoutEngine {
+                     // 그린다. 커서는 host 본문 끝(아래 #1218 보정)에서 이어진다.
+                     table_y_before
+                 } else {
+-                    empty_rowbreak_flow_end.unwrap_or(table_flow_end)
++                    // [HOP patch] Hancom 2024 resumes the body below an empty-anchor TopAndBottom table at the
++                    // table bottom plus its outer bottom margin (typeset hop_rules; in a test printout rhwp was
++                    // 1280 HU = 12.8 pt short before the next line). Typeset already reserves it.
++                    let hop_outer_bottom_px = if is_current_empty_para_float {
++                        crate::renderer::typeset::hop_empty_anchor_table_outer_bottom_px(
++                            Some(para),
++                            paragraphs.get(para_index + 1),
++                            t,
++                            styles,
++                            self.dpi,
++                        )
++                        .unwrap_or(0.0)
++                    } else {
++                        0.0
++                    };
++                    empty_rowbreak_flow_end.unwrap_or(table_flow_end + hop_outer_bottom_px)
+                 };
+                 let signed_vertical_offset = signed_hwpunit(t.common.vertical_offset);
+                 let zero_offset_has_following_coanchored_float = signed_vertical_offset == 0
+@@ -14704,6 +14719,29 @@ impl LayoutEngine {
+                 }
+             }
+ 
++            // [HOP patch] Below the last fragment of an empty-anchor TopAndBottom table without stored lines,
++            // the body resumes after the outer bottom margin, as typeset reserves it (hop_rules).
++            if !is_tac
++                && !repeat_fragment_outer_margin
++                && end_cut.is_empty()
++                && !ctx
++                    .paragraph_float_placements
++                    .contains_key(&(para_index, control_index))
++            {
++                if let Some(Control::Table(table)) = para.controls.get(control_index) {
++                    if end_row >= table.row_count as usize {
++                        y_offset += crate::renderer::typeset::hop_empty_anchor_table_outer_bottom_px(
++                            Some(para),
++                            paragraphs.get(para_index + 1),
++                            table,
++                            styles,
++                            self.dpi,
++                        )
++                        .unwrap_or(0.0);
++                    }
++                }
++            }
++
+             // The terminal nested child owns the visible table bbox, while its saved
+             // empty host Enter owns only the following flow advance. Typeset records
+             // the same value on the terminal continuation; consume it here after
+diff --git a/src/renderer/typeset.rs b/src/renderer/typeset.rs
+index cd56863277fa87df36520b5cc67ffea5b18e8800..24f357c2e0c6c0b6884440bb01ee833d80004501 100644
+--- a/src/renderer/typeset.rs
++++ b/src/renderer/typeset.rs
+@@ -103,6 +103,8 @@ use self::table::continuation::{
+     TableContinuationIteration,
+ };
+ pub(crate) use self::table::continuation::{ResumablePaginationStep, ResumableTablePaginationJob};
++// [HOP patch] Shared with layout: the flow below an empty-anchor table (paragraph::hop_rules).
++pub(crate) use self::paragraph::hop_rules::empty_anchor_table_outer_bottom_px as hop_empty_anchor_table_outer_bottom_px;
+ use self::table::scan::{BlockRowScanVars, BlockTableRowScan};
+ 
+ fn empty_paragraph_fallback_line_metrics(
+diff --git a/src/renderer/typeset/paragraph/hop_rules.rs b/src/renderer/typeset/paragraph/hop_rules.rs
+index ef8956e2829d7c873390bc25b2b666246361a0ac..296a92994e2003e833a933f18a4b9860925b580e 100644
+--- a/src/renderer/typeset/paragraph/hop_rules.rs
++++ b/src/renderer/typeset/paragraph/hop_rules.rs
+@@ -36,6 +36,32 @@ pub(in crate::renderer::typeset) fn layout_drift_safety_px(st: &TypesetState, pa
+     }
+ }
+ 
++/// The flow below an empty-anchor TopAndBottom table in a paragraph without stored lines, before the next
++/// paragraph's own spacing: Hancom 2024 collapses the table's outer bottom margin with that spacing and keeps the
++/// larger one (Hancom 2024 printouts of test documents: 1280 HU margin before a 0-spacing paragraph
++/// gives the whole 12.8 pt; after an 80-row table the same margin before an 8.8 pt heading gives 12.8 pt, not 21.6 pt).
++/// `None` when the rule does not apply (other tables keep rhwp's own flow).
++pub(crate) fn empty_anchor_table_outer_bottom_px(
++    para: Option<&Paragraph>,
++    next: Option<&Paragraph>,
++    table: &crate::model::table::Table,
++    styles: &ResolvedStyleSet,
++    dpi: f64,
++) -> Option<f64> {
++    para.filter(|para| {
++        !table.common.treat_as_char
++            && crate::renderer::float_placement::is_para_topbottom_float(&table.common)
++            && !crate::renderer::typeset::para_has_non_whitespace_text(para)
++            && crate::renderer::para_has_no_stored_line_segs(para)
++    })
++    .map(|_| {
++        let next_spacing_before = next
++            .and_then(|next| styles.para_styles.get(next.para_shape_id as usize))
++            .map_or(0.0, |style| style.spacing_before);
++        (crate::renderer::hwpunit_to_px(table.outer_margin_bottom as i32, dpi) - next_spacing_before).max(0.0)
++    })
++}
++
+ /// Widow control for one page's fragment `cursor_line..end_line` of a paragraph that continues: when only its
+ /// last line would go on, one more line goes with it.
+ pub(in crate::renderer::typeset) fn widow_end_line(
+diff --git a/src/renderer/typeset/table/continuation/fragment/emit.rs b/src/renderer/typeset/table/continuation/fragment/emit.rs
+index 697a02f335a56e693ed87d95fee48770a54e7fb2..80f4e42ad8685a453ad14eb0ba2c1bfc091dbdb9 100644
+--- a/src/renderer/typeset/table/continuation/fragment/emit.rs
++++ b/src/renderer/typeset/table/continuation/fragment/emit.rs
+@@ -35,6 +35,15 @@ impl TypesetEngine {
+         let host_spacing_total = input.prepared.host_spacing_total;
+         let host_spacing_after_only = input.prepared.host_spacing_after_only;
+         let terminal_host_spacing = input.prepared.terminal_host_spacing;
++        // [HOP patch] Below the last fragment the body resumes after the outer bottom margin (hop_rules).
++        let hop_outer_bottom = crate::renderer::typeset::paragraph::hop_rules::empty_anchor_table_outer_bottom_px(
++            input.source.paragraphs_all.get(para_idx),
++            input.source.paragraphs_all.get(para_idx + 1),
++            table,
++            styles,
++            self.dpi,
++        )
++        .unwrap_or(0.0);
+         let relax_terminal_table_footnote_fit = input.prepared.relax_terminal_table_footnote_fit;
+         let cursor_row = input.start.cursor_row;
+         let is_continuation = input.start.is_continuation;
+@@ -737,7 +746,7 @@ impl TypesetEngine {
+                         + vert_offset_overhead
+                         + partial_height
+                         + bottom_caption_extra
+-                        + terminal_outer_bottom_overhead
++                        + terminal_outer_bottom_overhead.max(hop_outer_bottom)
+                         + host_spacing_after_only
+                         + terminal_host_spacing,
+                 );
+@@ -931,7 +940,11 @@ impl TypesetEngine {
+                 + fragment_outer_bottom_overhead,
+         );
+         if terminal_cut_consumed {
+-            st.advance_flow_by(host_spacing_after_only + terminal_host_spacing);
++            st.advance_flow_by(
++                (hop_outer_bottom - fragment_outer_bottom_overhead).max(0.0)
++                    + host_spacing_after_only
++                    + terminal_host_spacing,
++            );
+             commit_fragment(st, caption_extra + partial_height, true);
+             continuation.finish(row_count, true);
+             return TableContinuationIteration::Complete;
+diff --git a/src/renderer/typeset/table/host_spacing.rs b/src/renderer/typeset/table/host_spacing.rs
+index 1f7b105b699a6449bb6c8a1b1419662eecafd66e..b17878c3e2bf2a3857ff5c60eca020be39cc9805 100644
+--- a/src/renderer/typeset/table/host_spacing.rs
++++ b/src/renderer/typeset/table/host_spacing.rs
+@@ -110,7 +110,15 @@ pub(super) fn resolve(
+     let outer_bottom = if is_tac || is_visible_host_float || absolute_table_with_post_text {
+         hwpunit_to_px(table.outer_margin_bottom as i32, dpi)
+     } else if is_empty_host_float {
+-        hwpunit_to_px(table.outer_margin_bottom as i32, dpi)
++        // [HOP patch] Without stored lines the margin collapses with the next paragraph's spacing (hop_rules).
++        crate::renderer::typeset::paragraph::hop_rules::empty_anchor_table_outer_bottom_px(
++            Some(para),
++            next_para,
++            table,
++            styles,
++            dpi,
++        )
++        .unwrap_or_else(|| hwpunit_to_px(table.outer_margin_bottom as i32, dpi))
+     } else {
+         0.0
+     };

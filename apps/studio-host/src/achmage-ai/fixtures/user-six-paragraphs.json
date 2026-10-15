@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "operation": "replace_paragraphs",
+  "paragraphs": [
+    {
+      "runs": [
+        {
+          "text": "봄 학기 운영 안내",
+          "fontFamily": "함초롬바탕",
+          "fontSizePt": 15,
+          "bold": true,
+          "spacingPercent": -5
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "이번 학기 강의는 3월 첫 주에 시작하며, 수강 신청은 학사 시스템에서 2월 마지막 주까지 받습니다.",
+          "fontFamily": "신명조",
+          "fontSizePt": 11,
+          "bold": false,
+          "spacingPercent": 0
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "강의실과 시간표는 학과 게시판에 올린 표를 따르며, 바뀐 내용이 있으면 따로 알려 드립니다.",
+          "fontFamily": "함초롬바탕",
+          "fontSizePt": 10.5,
+          "bold": false,
+          "spacingPercent": -3
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "과제는 매주 금요일 오후 6시까지 내고, 늦게 낸 과제는 하루마다 10%씩 감점합니다.",
+          "fontFamily": "신명조",
+          "fontSizePt": 10,
+          "bold": false,
+          "spacingPercent": -2
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "출석은 수업 시작 10분 안에 확인하며, 공결 서류는 일주일 안에 학과 사무실로 내면 됩니다.",
+          "fontFamily": "함초롬바탕",
+          "fontSizePt": 11.5,
+          "bold": true,
+          "spacingPercent": 5
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "궁금한 점은 수업 게시판에 남겨 주시면 이틀 안에 답을 드리겠습니다.",
+          "fontFamily": "신명조",
+          "fontSizePt": 9.5,
+          "bold": false,
+          "spacingPercent": -8
+        }
+      ]
+    }
+  ]
+}

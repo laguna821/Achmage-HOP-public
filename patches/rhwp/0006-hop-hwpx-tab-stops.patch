@@ -1,0 +1,297 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hop-workbench <hop@localhost>
+Date: Thu, 15 Oct 2026 17:36:30 +0900
+Subject: [PATCH 06/12] hop-hwpx-tab-stops
+
+
+diff --git a/src/cli/queries/ir_comparison.rs b/src/cli/queries/ir_comparison.rs
+index d16c771eaddba5656babda29a4695548db08ba40..46d63742cfd83e8383170d6ceb0fb70c1466e7fc 100644
+--- a/src/cli/queries/ir_comparison.rs
++++ b/src/cli/queries/ir_comparison.rs
+@@ -364,6 +364,8 @@ fn diff_shape_textbox(
+ 
+ /// `tab_extended`(`[u16; 7]`) 두 인라인 탭 레코드가 **의미 있는** 필드에서 다른지 판정.
+ ///
++/// [HOP patch] HOP 의 HWPX 파서는 인라인 탭을 모두 자리표(`TAB_EXT_PLACEHOLDER`)로 읽는다 —
++/// 한글 2024 인쇄 결과에 저장 폭이 쓰이지 않기 때문이다. 아래는 원래 규약 설명이다.
+ /// HWPX 파서(`parse_tab_extension`)는 인라인 탭을 `ext[0]`=width,
+ /// `ext[2]`=`type<<8 | leader`(leader 는 low byte), `ext[6]`=0x0009 마커로만 채우고
+ /// `ext[1]`·`ext[3]`·`ext[4]`·`ext[5]`는 0 으로 둔다. HWPX 직렬화(`render_hp_t_content`)도
+diff --git a/src/model/document.rs b/src/model/document.rs
+index a83677f76ab2495062382a32bf9c98ec3d372918..00f139a1d6f4a27f3cdac84530fa00528297c3a7 100644
+--- a/src/model/document.rs
++++ b/src/model/document.rs
+@@ -303,6 +303,11 @@ pub struct SectionDef {
+     pub char_grid: HwpUnit16,
+     /// 기본 탭 간격
+     pub default_tab_spacing: HwpUnit,
++    /// [HOP patch] HWPX `secPr@tabStopVal` (HWPUNIT): the default tab interval Hancom 2024 lays tabs out with
++    /// (`tabStop` changes nothing). `Some(0)` for an HWPX section without it — Hancom then has no default tab
++    /// stops and a tab with no explicit stop ahead takes no width. `None` outside HWPX (HWP5, new documents),
++    /// where layout keeps rhwp's 4000 HWPUNIT.
++    pub hop_tab_stop_val: Option<HwpUnit>,
+     /// 쪽 번호 (0이면 앞 구역에 이어서)
+     pub page_num: u16,
+     /// 쪽 번호 종류 (flags bit 20-21): 0=이어서, 1=홀수, 2=짝수
+diff --git a/src/parser/hwpx/header.rs b/src/parser/hwpx/header.rs
+index 3b82beee0d38f0baa300045928ab244a1f86619e..67db173ecf44fb0188645e33508edb0058bd4268 100644
+--- a/src/parser/hwpx/header.rs
++++ b/src/parser/hwpx/header.rs
+@@ -1985,7 +1985,11 @@ fn parse_tab_def(
+                             // default 값은 이미 2× 스케일
+                             default_tabs.push(item);
+                         } else {
+-                            // switch 바깥의 직접 tabItem (단위 불명, 그대로 사용)
++                            // switch 바깥의 직접 tabItem.
++                            // [HOP patch] Hancom 2024 prints it as HWPUNIT, like the HwpUnitChar case: pos 12000
++                            // printed at 120 pt from the paragraph start in a Hancom 2024 printout. rhwp
++                            // kept it as is, i.e. as the 2x-scaled default value, and laid it out at 60 pt.
++                            item.position = item.position.saturating_mul(2);
+                             td.tabs.push(item);
+                         }
+                     }
+@@ -2576,6 +2580,24 @@ mod tests {
+         );
+     }
+ 
++    /// [HOP patch] A tabItem outside hp:switch is in HWPUNIT (Hancom 2024: pos 12000 prints at 120 pt), so it is
++    /// stored at the 2x scale of HWP binaries and the hp:default branch.
++    #[test]
++    fn hop_direct_tab_item_is_hwpunit() {
++        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
++<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
++  <hh:refList>
++    <hh:tabProperties itemCnt="1">
++      <hh:tabPr id="0" autoTabLeft="0" autoTabRight="0">
++        <hh:tabItem pos="12000" type="LEFT" leader="NONE"/>
++      </hh:tabPr>
++    </hh:tabProperties>
++  </hh:refList>
++</hh:head>"##;
++        let (doc_info, _) = parse_hwpx_header(xml).unwrap();
++        assert_eq!(doc_info.tab_defs[0].tabs[0].position, 24000);
++    }
++
+     #[test]
+     fn test_parse_tab_item_leader_accepts_owpml_spec_literal_slim_thick() {
+         // OWPML LineType3 스펙 리터럴(Core XML schema.xml 335행)은 "SLIM_THICK"이다.
+diff --git a/src/parser/hwpx/section.rs b/src/parser/hwpx/section.rs
+index 8b490f6b18ee0e024cf04324560c162dc5085b27..4974ca4ec01c5b96bcfede45ddffd7d16fd998a1 100644
+--- a/src/parser/hwpx/section.rs
++++ b/src/parser/hwpx/section.rs
+@@ -409,8 +409,13 @@ fn build_hwpx_master_page_list_header(master_page: &MasterPage) -> Vec<u8> {
+ // ─── SectionDef / PageDef ───
+ 
+ fn parse_section_def_start(e: &quick_xml::events::BytesStart, sec_def: &mut SectionDef) {
++    // [HOP patch] tabStopVal in HWPUNIT is the interval Hancom 2024 uses; absent means no default stops.
++    let mut tab_stop_val = None;
++    let mut tab_stop_unit_hwpunit = true;
+     for attr in e.attributes().flatten() {
+         match attr.key.as_ref().as_bytes() {
++            b"tabStopVal" => tab_stop_val = Some(parse_u32(&attr)),
++            b"tabStopUnit" => tab_stop_unit_hwpunit = attr_str(&attr) == "HWPUNIT",
+             b"textDirection" => {
+                 let val = attr_str(&attr);
+                 sec_def.text_direction = if val == "VERTICAL" { 1 } else { 0 };
+@@ -440,6 +445,12 @@ fn parse_section_def_start(e: &quick_xml::events::BytesStart, sec_def: &mut Sect
+             _ => {}
+         }
+     }
++    sec_def.hop_tab_stop_val = match (tab_stop_val, tab_stop_unit_hwpunit) {
++        (Some(val), true) => Some(val),
++        (None, _) => Some(0),
++        // Another unit has not been checked against Hancom: keep rhwp's default interval.
++        (Some(_), false) => None,
++    };
+ }
+ 
+ fn parse_page_pr(e: &quick_xml::events::BytesStart, page: &mut PageDef) {
+@@ -2229,23 +2240,13 @@ fn read_text_content_with_tabs(
+     Ok((parts, tab_ext_buf, saw_nb_space_element))
+ }
+ 
+-fn parse_tab_extension(e: &quick_xml::events::BytesStart) -> [u16; 7] {
+-    let mut ext = [0u16; 7];
+-    ext[6] = 0x0009;
+-    let mut leader = 0u16;
+-    let mut tab_type = 0u16;
+-
+-    for attr in e.attributes().flatten() {
+-        match attr.key.as_ref().as_bytes() {
+-            b"width" => ext[0] = parse_u16(&attr),
+-            b"leader" => leader = parse_u16(&attr) & 0x00ff,
+-            b"type" => tab_type = parse_u16(&attr) & 0x00ff,
+-            _ => {}
+-        }
+-    }
+-    ext[2] = (tab_type << 8) | leader;
+-
+-    ext
++/// [HOP patch] Hancom 2024 lays out every HWPX tab from the paragraph's TabDef and the section's default
++/// interval: `width` 0/1200/2400 or none print alike, and an explicit stop wins over the stored width (compared on
++/// Hancom 2024 printouts). The stored width/leader/type are a layout cache (generators write constants), so the
++/// tab is read as the placeholder layout recomputes — the #7170 convention, which keeps later tabs on their
++/// ordinals. Saving writes the no-data marker, which Hancom lays out the same way.
++fn parse_tab_extension(_e: &quick_xml::events::BytesStart) -> [u16; 7] {
++    crate::model::paragraph::TAB_EXT_PLACEHOLDER
+ }
+ 
+ /// `<hp:tab width="0" leader="0" type="1"/>` — 서식기(`serializer/hwpx/section.rs`
+@@ -8119,6 +8120,35 @@ mod tests {
+         assert_ne!(section_def.flags & 0x0008_0000, 0);
+     }
+ 
++    /// [HOP patch] Hancom 2024's default tab interval is secPr@tabStopVal (none = no default stops), and the
++    /// width stored on a tab is a cache it recomputes.
++    #[test]
++    fn hop_tab_stop_val_and_stored_tab_widths_follow_hancom() {
++        let section = |sec_attrs: &str| {
++            parse_hwpx_section(&format!(
++                r#"<?xml version="1.0" encoding="UTF-8"?>
++<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
++        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
++  <hp:p paraPrIDRef="0" styleIDRef="0">
++    <hp:run charPrIDRef="0">
++      <hp:secPr id="" textDirection="HORIZONTAL" spaceColumns="1134" tabStop="8000"{sec_attrs} outlineShapeIDRef="1" masterPageCnt="0"></hp:secPr>
++      <hp:t>AAA<hp:tab width="1200" leader="3" type="2"/>BBB</hp:t>
++    </hp:run>
++  </hp:p>
++</hs:sec>"#
++            ))
++            .unwrap()
++        };
++        let hancom = section(r#" tabStopVal="6000" tabStopUnit="HWPUNIT""#);
++        assert_eq!(hancom.section_def.hop_tab_stop_val, Some(6000));
++        assert_eq!(hancom.section_def.default_tab_spacing, 8000);
++        assert_eq!(section("").section_def.hop_tab_stop_val, Some(0));
++        assert_eq!(section(r#" tabStopVal="6000" tabStopUnit="CHAR""#).section_def.hop_tab_stop_val, None);
++        let para = &hancom.paragraphs[0];
++        assert_eq!(para.text, "AAA\tBBB");
++        assert_eq!(para.tab_extended, vec![crate::model::paragraph::TAB_EXT_PLACEHOLDER]);
++    }
++
+     #[test]
+     fn equation_missing_attrs_fall_back_to_owpml_defaults() {
+         // OWPML 스키마(ParaList, EquationType)의 속성 기본값:
+@@ -8892,7 +8922,9 @@ mod tests {
+         let section = parse_hwpx_section(xml).unwrap();
+         let para = &section.paragraphs[0];
+         assert_eq!(para.text, "A\t(페이지 표기)");
+-        assert_eq!(para.tab_extended, vec![[17283, 0, 0x0203, 0, 0, 0, 9]]);
++        // [HOP patch] Hancom 2024 lays HWPX tabs out anew, so the stored width/leader/type read as the placeholder
++        // (rhwp read them as [17283, 0, 0x0203, 0, 0, 0, 9]).
++        assert_eq!(para.tab_extended, vec![crate::model::paragraph::TAB_EXT_PLACEHOLDER]);
+     }
+ 
+     #[test]
+diff --git a/src/renderer/style_resolver.rs b/src/renderer/style_resolver.rs
+index bf257e0171b3a48043e99c43021a419688ab65a6..9918df66f709bb76260fc51d764d80fe9a0951a1 100644
+--- a/src/renderer/style_resolver.rs
++++ b/src/renderer/style_resolver.rs
+@@ -482,6 +482,9 @@ pub fn resolve_styles(doc_info: &DocInfo, dpi: f64) -> ResolvedStyleSet {
+     resolve_styles_with_variant(doc_info, dpi, false)
+ }
+ 
++/// [HOP patch] Default tab interval standing for "no default tab stops" (HWPX without `tabStopVal`).
++pub(crate) const HOP_NO_DEFAULT_TAB_PX: f64 = 1.0e-6;
++
+ /// Resolve styles with the document's format-specific style normalization.
+ /// Layout provenance itself remains owned by `LayoutCompatibilityProfile` and
+ /// is passed separately to consumers that need it.
+@@ -490,6 +493,19 @@ pub(crate) fn resolve_styles_for_document(document: &Document, dpi: f64) -> Reso
+     let mut styles = resolve_styles_with_variant(&document.doc_info, dpi, profile.hwp3_layout());
+     // [#7051] 계보 신호가 없는 저장본의 HFT ASCII 반각 판정은 로드 시 한 번 내려 출처에 둔다.
+     styles.hft_ascii_halfwidth |= document.provenance.hft_ascii_halfwidth_witnessed;
++    // [HOP patch] HWPX: the default tab interval is the section's tabStopVal, and none means no default stops.
++    // A vanishing interval makes every `((x / w).floor() + 1) * w` tab computation return x, i.e. a tab with
++    // no width, without changing them; explicit TabDef stops are still found first.
++    if let Some(val) = document.sections.first().and_then(|s| s.section_def.hop_tab_stop_val) {
++        let width = if val == 0 {
++            HOP_NO_DEFAULT_TAB_PX
++        } else {
++            hwpunit_to_px(val as i32, dpi)
++        };
++        for style in &mut styles.para_styles {
++            style.default_tab_width = width;
++        }
++    }
+     if profile.hwpx_stored_layout() {
+         // 같은 14pt 한양신명조라도 일반 본문과 표 안의 공백 조판은 다르다.
+         // 검증 HWPX의 일반 본문은 반각, 표 안은 기존 저장 메트릭을 쓴다.
+@@ -1551,6 +1567,31 @@ mod tests {
+         }
+     }
+ 
++    /// [HOP patch] An HWPX section's tabStopVal is the default tab interval; without one a tab takes no width
++    /// unless an explicit stop lies ahead. Other documents keep rhwp's 4000 HWPUNIT.
++    #[test]
++    fn hop_hwpx_tab_stop_val_sets_default_tab_interval() {
++        let interval = |val: Option<u32>| {
++            let mut doc = Document::default();
++            doc.doc_info = make_doc_info_with_font();
++            doc.doc_info.para_shapes.push(Default::default());
++            let mut section = crate::model::document::Section::default();
++            section.section_def.hop_tab_stop_val = val;
++            doc.sections.push(section);
++            let styles = resolve_styles_for_document(&doc, DEFAULT_DPI);
++            assert!(!styles.para_styles.is_empty());
++            styles.para_styles[0].default_tab_width
++        };
++        assert_eq!(interval(Some(6000)), hwpunit_to_px(6000, DEFAULT_DPI));
++        assert_eq!(interval(None), hwpunit_to_px(4000, DEFAULT_DPI));
++        let none = interval(Some(0));
++        let (next, _, _) = crate::renderer::layout::find_next_tab_stop(75.3, &[], none, false, 600.0);
++        assert!((next - 75.3).abs() < 1e-5, "{next}");
++        let stop = [TabStop { position: 160.0, tab_type: 0, fill_type: 0 }];
++        let (next, _, _) = crate::renderer::layout::find_next_tab_stop(75.3, &stop, none, false, 600.0);
++        assert_eq!(next, 160.0);
++    }
++
+     #[test]
+     fn test_resolve_char_style_font_name() {
+         let doc_info = make_doc_info_with_font();
+diff --git a/src/serializer/hwpx/section.rs b/src/serializer/hwpx/section.rs
+index 8829aec04556cb7a37e91c5343e982eefa13ddc7..511931aa4db8d1f8b21f7bade844f0d10d1b076e 100644
+--- a/src/serializer/hwpx/section.rs
++++ b/src/serializer/hwpx/section.rs
+@@ -168,6 +168,15 @@ fn replace_secpr_scalars(xml: &str, sd: &SectionDef) -> String {
+         out
+     };
+ 
++    // [HOP patch] tabStopVal is the interval Hancom 2024 lays tabs out with. Write back what the section was read
++    // with: its value, or nothing when it had none (Hancom then gives tabs no default stops). New sections keep
++    // the template's 4000.
++    let out = match sd.hop_tab_stop_val {
++        Some(0) => out.replacen(r#" tabStopVal="4000" tabStopUnit="HWPUNIT""#, "", 1),
++        Some(val) => out.replacen(r#"tabStopVal="4000""#, &format!(r#"tabStopVal="{val}""#), 1),
++        None => out,
++    };
++
+     // 구역 그리드와 시작 번호. 템플릿 상수가 모두 0 이고 SectionDef 기본값도 0 이라
+     // 기본 문서의 출력은 그대로이며, 파싱된 문서에서만 실제 값이 살아난다.
+     let out = out.replacen(
+@@ -4981,6 +4990,24 @@ mod tests {
+         );
+     }
+ 
++    /// [HOP patch] tabStopVal is written back as read; a section read without it stays without it.
++    #[test]
++    fn hop_secpr_writes_back_tab_stop_val_as_read() {
++        let mut para = Paragraph::default();
++        para.text = "x".to_string();
++        let (doc, mut section) = make_doc_with_paragraph(para);
++        let mut write = |val: Option<u32>| {
++            section.section_def.hop_tab_stop_val = val;
++            let mut ctx = SerializeContext::collect_from_document(&doc);
++            String::from_utf8(write_section(&section, &doc, 0, &mut ctx).unwrap()).unwrap()
++        };
++        assert!(write(Some(6000)).contains(r#"tabStop="8000" tabStopVal="6000" tabStopUnit="HWPUNIT""#));
++        let without = write(Some(0));
++        assert!(without.contains(r#"tabStop="8000" outlineShapeIDRef"#), "{without:.600}");
++        assert!(!without.contains("tabStopVal"));
++        assert!(write(None).contains(r#"tabStopVal="4000" tabStopUnit="HWPUNIT""#));
++    }
++
+     #[test]
+     fn secpr_emits_tab_stop_val_and_unit() {
+         // [Finding 14] 원본 secPr 의 tabStopVal="4000" tabStopUnit="HWPUNIT" (한컴

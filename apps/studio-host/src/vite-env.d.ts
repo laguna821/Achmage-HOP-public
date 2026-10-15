@@ -2,3 +2,4 @@
 
 declare const __APP_VERSION__: string;
 declare const __HOP_VERSION__: string;
+declare const __ACHMAGE_VERSION__: string;

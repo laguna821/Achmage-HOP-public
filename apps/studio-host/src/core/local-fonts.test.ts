@@ -69,7 +69,7 @@ describe('local fonts', () => {
     expect(invokeMock).toHaveBeenCalledWith('list_local_fonts');
   });
 
-  it('loads requested safe file-backed fonts through the desktop bridge once per path', async () => {
+  it('loads requested file-backed fonts before granting authoring availability', async () => {
     (globalThis as { window?: unknown }).window = { __TAURI_INTERNALS__: {} };
     const addedFamilies: string[] = [];
     installBinaryFontEnvironment(addedFamilies);
@@ -101,7 +101,7 @@ describe('local fonts', () => {
         ];
       }
       if (command === 'read_local_font') {
-        expect(args?.path).toBe('/vendor/NewFont.ttf');
+        expect(['/vendor/NewFont.ttf', '/vendor/HYHeadLineM.ttf']).toContain(args?.path);
         return [0, 1, 2, 3];
       }
       throw new Error(`unexpected command: ${command}`);
@@ -114,11 +114,38 @@ describe('local fonts', () => {
     expect(Array.from(availableFonts)).toEqual(
       expect.arrayContaining(['새 파일폰트', '맑은 고딕']),
     );
-    expect(availableFonts).not.toContain('HYHeadLine M');
-    expect(availableFonts.size).toBe(2);
-    expect(addedFamilies).toEqual(['새 파일폰트']);
+    expect(addedFamilies).toContain('HYHeadLine M');
+    expect(availableFonts).toContain('HYHeadLine M');
+    expect(availableFonts.size).toBe(3);
+    expect(addedFamilies).toEqual(expect.arrayContaining(['새 파일폰트', 'HYHeadLine M']));
     expect(invokeMock).toHaveBeenCalledWith('read_local_font', { path: '/vendor/NewFont.ttf' });
-    expect(invokeMock).toHaveBeenCalledTimes(2);
+    expect(invokeMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('loads a Hancom full face name ("family style") from the matching installed face under that name', async () => {
+    (globalThis as { window?: unknown }).window = { __TAURI_INTERNALS__: {} };
+    const addedFamilies: string[] = [];
+    installBinaryFontEnvironment(addedFamilies);
+    invokeMock.mockImplementation(async (command: string, args?: { path?: string }) => {
+      if (command === 'list_local_fonts') {
+        return [
+          { family: '한림고딕체', postScriptName: 'Hallym-Bold', style: 'normal', weight: 700, sourceKind: 'system-installed', path: '/fonts/HallymGothic-Bold.ttf' },
+          { family: '한림고딕체', postScriptName: 'Hallym-Regular', style: 'normal', weight: 400, sourceKind: 'file-backed', path: '/assets/HallymGothic-Regular.ttf' },
+          { family: '한림고딕체', postScriptName: 'Hallym-Regular', style: 'normal', weight: 400, sourceKind: 'system-installed', path: '/fonts/HallymGothic-Regular.ttf' },
+        ];
+      }
+      if (command === 'read_local_font') return [0, 1, 2, 3];
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const fonts = await import('./local-fonts');
+    const available = await fonts.ensureLocalFontsAvailable(['한림고딕체 Regular', '한림고딕체 Bold', '없는글꼴 Regular']);
+    expect(available).toContain('한림고딕체 Regular');
+    expect(available).toContain('한림고딕체 Bold');
+    expect(available).not.toContain('없는글꼴 Regular');
+    expect(addedFamilies).toEqual(expect.arrayContaining(['한림고딕체 Regular', '한림고딕체 Bold']));
+    expect(invokeMock).toHaveBeenCalledWith('read_local_font', { path: '/assets/HallymGothic-Regular.ttf' });
+    expect(fonts.resolveRendererLocalFont('한림고딕체 Regular')?.postscriptName).toBe('Hallym-Regular');
+    expect(fonts.resolveRendererLocalFont('한림고딕체 Black')).toBeNull();
   });
 
   it('returns an empty cached list before detection', async () => {
@@ -219,7 +246,7 @@ describe('local fonts', () => {
     await ensureLocalFontsAvailable(['새 파일폰트']);
     await detectLocalFonts({ force: true });
 
-    expect(addedFamilies).toEqual(['새 파일폰트']);
+    expect(addedFamilies).toEqual(['새 파일폰트', '새 파일폰트']);
     expect(deletedFamilies).toEqual(['새 파일폰트']);
   });
 

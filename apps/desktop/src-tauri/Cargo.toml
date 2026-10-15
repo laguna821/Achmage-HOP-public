@@ -17,8 +17,13 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+hangul-ai-session = { path = "../achmage-ai" }
+achmage-research = { path = "../achmage-research" }
+achmage-runtime = { path = "../achmage-runtime" }
+achmage-providers = { path = "../achmage-providers" }
+achmage-telegram = { path = "../achmage-telegram" }
 hop-rhwp-adapter = { path = "../rhwp-adapter" }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2.5"
 tauri-plugin-log = "2"
@@ -28,14 +33,21 @@ tauri-plugin-updater = "2"
 tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
+sha2 = "0.10"
 uuid = { version = "1", features = ["v4", "serde"] }
 tempfile = "3"
 open = "5"
 usvg = "0.45"
+tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
+zeroize = "1"
 
 [patch.crates-io]
 # Use upstream's vendored svg2pdf fixes for deterministic ordering and PDF rendering.
 svg2pdf = { path = "../../../third_party/rhwp/vendor/svg2pdf" }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSDocumentController"] }

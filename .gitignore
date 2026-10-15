@@ -46,3 +46,19 @@ Thumbs.db
 # 환경변수 (민감 정보)
 .env
 .env.docker
+
+# Build-owned pinned Kordoc/Node runtime; package sources and lockfiles are tracked separately.
+/apps/desktop/src-tauri/resources/runtime/
+/apps/desktop/src-tauri/resources/kordoc-engine/
+/apps/desktop/src-tauri/resources/kordoc-runtime.json
+/apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.md
+
+# Achmage local run evidence, logs and probe outputs (machine-local; may hold account state, never published)
+/apps/**/evidence/
+/apps/desktop/achmage-*/*.log
+/apps/desktop/achmage-research/*probe*.json
+/apps/desktop/achmage-research/verification.json
+
+
+# Python bytecode from the helper scripts (sync-rhwp-native.py imports export-rhwp-source.py).
+__pycache__/

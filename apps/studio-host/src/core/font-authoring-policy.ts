@@ -1,5 +1,21 @@
 const SANS_FALLBACK = '함초롬돋움';
 const SERIF_FALLBACK = '함초롬바탕';
+// A catalog entry alone is not evidence that a proprietary face can be used.
+// Desktop callers grant this only after FontFace.load + document.fonts.add.
+const registeredLocalFamilies = new Set<string>();
+
+export function registerLoadedLocalAuthoringFamily(family: string): void {
+  const key = fontFamilyKey(family);
+  if (key) registeredLocalFamilies.add(key);
+}
+
+export function clearLoadedLocalAuthoringFamilies(): void {
+  registeredLocalFamilies.clear();
+}
+
+export function isLoadedLocalAuthoringFamily(family: string): boolean {
+  return registeredLocalFamilies.has(fontFamilyKey(family));
+}
 
 const BLOCKED_FONT_KEYS = new Set([
   'hy헤드라인m',
@@ -26,6 +42,7 @@ const BLOCKED_FONT_KEYS = new Set([
 export function isAuthoringBlockedFontFamily(family: string | null | undefined): boolean {
   const key = fontFamilyKey(family);
   if (!key) return false;
+  if (registeredLocalFamilies.has(key)) return false;
   if (BLOCKED_FONT_KEYS.has(key)) return true;
   if (key.startsWith('휴먼')) return true;
   if (key.startsWith('hci')) return true;

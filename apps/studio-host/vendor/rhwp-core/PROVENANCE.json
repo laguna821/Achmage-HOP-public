@@ -8,20 +8,20 @@
   "wasmPackVersion": "0.14.0",
   "artifacts": {
     "rhwp_bg.wasm": {
-      "bytes": 11803733,
-      "sha256": "5a77a0f5156c7fbf6db1745095d7886d057b5d05bfba25759112cb46be8e97ec"
+      "bytes": 11830281,
+      "sha256": "241e13daa6c2ece550b428ef759267ad2e10995398523f07b2e61eb87b7ded84"
     },
     "rhwp.js": {
-      "bytes": 454520,
-      "sha256": "70cde06a369fa7fd4fc8bc8f3d6acaee158596ba1a116a2c72159002b0b5654e"
+      "bytes": 454845,
+      "sha256": "5331a3faa778b524665e1dafbe269ce2d424b1296345b8f1d54f03173f4eeeaa"
     },
     "rhwp.d.ts": {
-      "bytes": 183636,
-      "sha256": "4742243ad37a992ba3deec56a3e3e7b57f05073e49806027147acc054b5fce85"
+      "bytes": 183944,
+      "sha256": "909fd0df83717d48d33f083295fda75d3de037dd30d41c2322be7cad3ebfe290"
     },
     "rhwp_bg.wasm.d.ts": {
-      "bytes": 61666,
-      "sha256": "8c9f8bbb336094aa5017fdc03b1059cbe60e8af67086fec1287000a0e322f151"
+      "bytes": 61746,
+      "sha256": "4a50a742a7311e4fb813f40cf93758a242daf860eda1967a881b0cbecd638674"
     },
     "package.json": {
       "bytes": 414,
@@ -31,5 +31,74 @@
       "bytes": 1072,
       "sha256": "1c3a7d5643b163a3ead4965e1bea33b832caee5bfca265efe42afcd7bc696b5b"
     }
+  },
+  "hopPatches": [
+    {
+      "file": "0001-hop-font-metrics-hallym.patch",
+      "sha256": "5f2cc46e7d1d0a75c98134c51daafd81a2976066b8f13a77da79d00d82ececd4"
+    },
+    {
+      "file": "0002-hop-auto-tab-left.patch",
+      "sha256": "830f9d13d724e64870250b75abfa194dbfdcc925685f6f7142a544490a7f58ae"
+    },
+    {
+      "file": "0003-hop-canvas-synthetic-bold.patch",
+      "sha256": "e1398a1bcc5e3e7221b40b850c061074d8799306f78552ffa0637c060b368391"
+    },
+    {
+      "file": "0004-hop-text-layout-baseline.patch",
+      "sha256": "54f21ccc4168137822ee7d7036746f5643ea997776845b0b5a84bd561612ec12"
+    },
+    {
+      "file": "0005-hop-line-break-size.patch",
+      "sha256": "6c1dd9404e47419b6bf126c11070f926950c91df8aae71e41bdfd45789da0ab4"
+    },
+    {
+      "file": "0006-hop-hwpx-tab-stops.patch",
+      "sha256": "10af312cd0835d83039142b217f3459a9977208bd99e5aa57ba5f0ab31985554"
+    },
+    {
+      "file": "0007-hop-widow-orphan-keep-next.patch",
+      "sha256": "7c9340a3011867fcb9135b2c647650e63d1618efc76935d82f19884101630969"
+    },
+    {
+      "file": "0008-hop-empty-anchor-table-outer-bottom.patch",
+      "sha256": "fc9795376d359925eba5c8ac8904fca006c709ff75013b3da28e4fabffef71bb"
+    },
+    {
+      "file": "0009-hop-hwpx-plain-margins.patch",
+      "sha256": "50eae68bcbeb16f73f096241e16fb66c65b07f7042139dfff38f9a5c4c0acee5"
+    },
+    {
+      "file": "0010-hop-hang-trailing-space.patch",
+      "sha256": "ddc04b270b399b8329cfee89784342c009d118cc92313b2cc1adecd5f1f59446"
+    },
+    {
+      "file": "0011-hop-tab-justify.patch",
+      "sha256": "cc4043392222ba3dee529883389636c5e305fe828bbcee212ccb5f8e3be4c791"
+    },
+    {
+      "file": "0012-hop-generator-version-xml.patch",
+      "sha256": "b119c43306ae80ff8ecc13991d0c20530ba82d97c9d92686ee1479abd4d3c543"
+    }
+  ],
+  "hopBuild": {
+    "note": "rhwp_bg.wasm and its wasm-bindgen glue (rhwp.js, rhwp.d.ts, rhwp_bg.wasm.d.ts) are built by HOP from the pinned commit with hop/patches/rhwp applied (the patches add WASM methods, e.g. setHopPaginationRules); package.json and LICENSE are byte-identical to the upstream build.",
+    "upstreamWasm": {
+      "bytes": 11803733,
+      "sha256": "5a77a0f5156c7fbf6db1745095d7886d057b5d05bfba25759112cb46be8e97ec"
+    },
+    "exportExcludes": [
+      "mydocs",
+      "pdf",
+      "samples"
+    ],
+    "toolchain": "rustc 1.93.1 (01f6ddf75) wasm32-unknown-unknown, wasm-pack 0.14.0, Windows host",
+    "remapPathPrefix": "/cargo/registry/src",
+    "scripts": [
+      "scripts/achmage/export-rhwp-source.py --patches",
+      "scripts/achmage/build-rhwp-wasm.ps1",
+      "scripts/achmage/gen-hop-font-metrics.py (patch 0001 data)"
+    ]
   }
 }

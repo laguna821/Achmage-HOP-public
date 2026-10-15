@@ -15,7 +15,8 @@ test('production studio code reaches rhwp internals only through the upstream ad
   const manifest = JSON.parse(await readFile(join(repoRoot, 'config/rhwp-studio-overrides.json'), 'utf8'));
   const overrideIds = new Set(manifest.overrides.map((entry) => entry.id));
   for (const file of await typescriptFiles(studioRoot)) {
-    const relativePath = relative(studioRoot, file);
+    // Forward slashes on every OS, so the adapter-directory check also holds on Windows.
+    const relativePath = relative(studioRoot, file).replaceAll('\\', '/');
     if (relativePath.startsWith('upstream/') || relativePath.endsWith('.test.ts')) continue;
     const source = await readFile(file, 'utf8');
     if (source.includes("'@upstream/") || source.includes('"@upstream/')) {
@@ -42,7 +43,9 @@ test('desktop product crates reach rhwp only through the shared Rust adapter', a
   assert.match(quickLookManifest, /hop-rhwp-adapter\s*=\s*\{/);
   assert.doesNotMatch(desktopManifest, /^rhwp\s*=/m);
   assert.doesNotMatch(quickLookManifest, /^rhwp\s*=/m);
-  assert.match(adapterManifest, /^rhwp\s*=\s*\{\s*path\s*=\s*"\.\.\/\.\.\/\.\.\/third_party\/rhwp"\s*\}/m);
+  // The adapter builds rhwp from the patched library tree (scripts/achmage/sync-rhwp-native.py), so native PDF
+  // and Quick Look use the same layout code as the vendored WASM; tests/rhwp-patch-queue.test.mjs keeps it in step.
+  assert.match(adapterManifest, /^rhwp\s*=\s*\{\s*path\s*=\s*"\.\.\/\.\.\/\.\.\/vendor\/rhwp-native"\s*\}/m);
 
   const violations = [];
   for (const root of [

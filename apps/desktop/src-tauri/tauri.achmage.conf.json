@@ -1,0 +1,17 @@
+{
+  "productName": "Achmage HOP",
+  "identifier": "local.achmage.hop",
+  "app": {
+    "windows": [{"title":"Achmage HOP","label":"main","url":"index.html","width":1440,"height":900,"minWidth":960,"minHeight":720}]
+  },
+  "bundle": {
+    "publisher":"Achmage",
+    "active":false,
+    "shortDescription":"Achmage HOP — HWP/HWPX editor",
+    "longDescription":"Achmage HOP opens, edits and saves HWP/HWPX documents and writes them with AI. Unofficial distribution based on HOP and rhwp; not affiliated with Hancom, HOP or rhwp.",
+    "copyright":"Copyright (c) 2026 laguna821 and HOP contributors. Based on HOP and rhwp (MIT).",
+    "resources":{"resources/runtime/":"runtime/","resources/kordoc-engine/":"kordoc-engine/","resources/kordoc-runtime.json":"kordoc-runtime.json","resources/THIRD_PARTY_NOTICES.md":"THIRD_PARTY_NOTICES.md"},
+    "macOS":{"files":null}
+  },
+  "plugins": {"updater":{"endpoints":[]}}
+}

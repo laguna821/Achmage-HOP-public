@@ -54,6 +54,31 @@ vi.mock('@/core/wasm-bridge', () => ({
       return this.exportHwpMock();
     }
 
+    contentLossMock = vi.fn(() => ({ schemaVersion: 1, outputFormat: 'hwp', count: 0, losses: [] as unknown[] }));
+    exportHwpWithReport() {
+      return { bytes: this.exportHwpMock(), contentLoss: this.contentLossMock() };
+    }
+
+    exportHwpxMock = vi.fn(() => new Uint8Array([0x50, 0x4b, 7]));
+    exportHwpxWithReport() {
+      return { bytes: this.exportHwpxMock(), contentLoss: { schemaVersion: 1, outputFormat: 'hwpx', count: 0, losses: [] as unknown[] } };
+    }
+
+    // An engine handle whose re-opened copy reads back as the same document unless the bytes start with 9.
+    borrowDocumentHandle() {
+      class Handle {
+        text: string;
+        constructor(bytes?: Uint8Array) { this.text = bytes?.[0] === 9 ? '다른 본문' : '본문'; }
+        getSectionCount() { return 1; }
+        getParagraphCount() { return 2; }
+        getTextFileUnicode() { return this.text; }
+        getControls() { return '[{"ctrlId":"secd"},{"ctrlId":"tbl"}]'; }
+        getDocumentInfo() { return '{"fontsUsed":["함초롬바탕"]}'; }
+        free() {}
+      }
+      return new Handle();
+    }
+
     getSourceFormat() {
       return this.sourceFormat;
     }
@@ -106,7 +131,7 @@ describe('TauriBridge', () => {
       docInfo: { pageCount: 2, fontsUsed: [] },
       message: 'opened.hwp — 2페이지',
     });
-    expect(document.title).toBe('opened.hwp - HOP');
+    expect(document.title).toBe('opened.hwp - Achmage HOP');
     expect(bridge.hasUnsavedChanges()).toBe(false);
   });
 
@@ -295,7 +320,7 @@ describe('TauriBridge', () => {
     await bridge.openDocumentByPath('/tmp/new.hwp');
 
     expect(invokeMock).toHaveBeenLastCalledWith('close_document', { docId: 'old-doc' });
-    expect(document.title).toBe('new.hwp - HOP');
+    expect(document.title).toBe('new.hwp - Achmage HOP');
   });
 
   it('opens a document selected from the Tauri dialog', async () => {
@@ -408,7 +433,7 @@ describe('TauriBridge', () => {
       warnings: [],
     });
 
-    expect(document.title).toBe('source.hwp - HOP');
+    expect(document.title).toBe('source.hwp - Achmage HOP');
     expect(bridge.hasUnsavedChanges()).toBe(false);
 
     bridge.markDocumentDirty();
@@ -417,7 +442,7 @@ describe('TauriBridge', () => {
     });
 
     expect(bridge.hasUnsavedChanges()).toBe(true);
-    expect(document.title).toBe('• source.hwp - HOP');
+    expect(document.title).toBe('• source.hwp - Achmage HOP');
   });
 
   it('proxies updater commands through the Tauri bridge', async () => {
@@ -456,20 +481,87 @@ describe('TauriBridge', () => {
     expect(invokeMock).toHaveBeenNthCalledWith(2, 'clear_recent_documents', {});
   });
 
-  it('blocks direct save for HWPX sources', async () => {
-    const bridge = new TauriBridge();
-    applyOpenResult(bridge, {
-      docId: 'doc-1',
-      fileName: 'source.hwpx',
-      sourcePath: '/tmp/source.hwpx',
-      format: 'hwpx',
-      pageCount: 1,
-      revision: 1,
-      dirty: false,
-      warnings: [],
-    });
+  const hwpxSource = (bridge: TauriBridge) => applyOpenResult(bridge, {
+    docId: 'doc-1', fileName: 'source.hwpx', sourcePath: '/tmp/source.hwpx', format: 'hwpx', pageCount: 1, revision: 3, dirty: true, warnings: [],
+  });
 
-    await expect(bridge.saveDocumentFromCommand()).rejects.toThrow('HWPX 원본 저장은 아직 안전하게 지원하지 않습니다');
+  it('saves an HWPX original as HWPX after its reopen check, through native staging', async () => {
+    const bridge = new TauriBridge();
+    hwpxSource(bridge);
+    const handle = writeHandle();
+    fsOpenMock.mockResolvedValue(handle);
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === 'check_external_modification') return { changed: false };
+      if (command === 'prepare_staged_hwp_save') { expect(args).toEqual({ targetPath: '/tmp/source.hwpx' }); return '/tmp/source.hwpx.hop-save-1.tmp'; }
+      if (command === 'commit_staged_hwp_save') {
+        expect(args).toMatchObject({ targetPath: '/tmp/source.hwpx', stagedPath: '/tmp/source.hwpx.hop-save-1.tmp', expectedRevision: 3 });
+        return { docId: 'doc-1', sourcePath: '/tmp/source.hwpx', format: 'hwpx', revision: 4, dirty: false, warnings: [] };
+      }
+      return undefined;
+    });
+    await expect(bridge.saveDocumentFromCommand()).resolves.toMatchObject({ format: 'hwpx', revision: 4 });
+    expect(handle.write).toHaveBeenCalledWith(new Uint8Array([0x50, 0x4b, 7]));
+    expect(bridge.getSourceFormat()).toBe('hwpx');
+  });
+
+  it('writes nothing when the HWPX bytes do not read back as the open document', async () => {
+    const bridge = new TauriBridge();
+    hwpxSource(bridge);
+    (bridge as unknown as { exportHwpxMock: { mockReturnValue(v: Uint8Array): void } }).exportHwpxMock.mockReturnValue(new Uint8Array([9, 9]));
+    const handle = writeHandle();
+    fsOpenMock.mockResolvedValue(handle);
+    invokeMock.mockImplementation(async (command: string) => command === 'check_external_modification' ? { changed: false } : command === 'prepare_staged_hwp_save' ? '/tmp/source.hwpx.hop-save-2.tmp' : undefined);
+    await expect(bridge.saveDocumentFromCommand()).rejects.toThrow('원본과 달라 저장하지 않았습니다');
+    expect(handle.write).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith('commit_staged_hwp_save', expect.anything());
+  });
+
+  it('offers HWPX first when saving an HWPX document under a new name', async () => {
+    const bridge = new TauriBridge();
+    hwpxSource(bridge);
+    saveMock.mockResolvedValue(null);
+    await bridge.saveDocumentAsFromCommand();
+    expect(saveMock).toHaveBeenCalledWith({ defaultPath: 'source.hwpx', filters: [{ name: 'HWPX 문서', extensions: ['hwpx'] }, { name: 'HWP 문서', extensions: ['hwp'] }] });
+  });
+
+  it('offers a password-protected document HWP only and refuses an .hwpx name instead of renaming it', async () => {
+    // Renaming report.hwpx to report.hwp would overwrite the encrypted original without the dialog's warning.
+    const bridge = new TauriBridge();
+    applyOpenResult(bridge, nativeOpenResult({ fileName: 'report.hwp', sourcePath: '/tmp/report.hwp' }));
+    bridge.requiresPasswordForSave = true;
+    saveMock.mockResolvedValue('/tmp/report.hwpx');
+    await expect(bridge.saveDocumentAsFromCommand()).rejects.toThrow('암호 없는 HWP 파일로만');
+    expect(saveMock).toHaveBeenCalledWith({ defaultPath: 'report.hwp', filters: [{ name: 'HWP 문서', extensions: ['hwp'] }] });
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(fsOpenMock).not.toHaveBeenCalled();
+  });
+
+  it('sends a file whose extension disagrees with its contents to Save As instead of rewriting it', async () => {
+    const bridge = new TauriBridge();
+    applyOpenResult(bridge, nativeOpenResult({ fileName: 'misnamed.hwp', sourcePath: '/tmp/misnamed.hwp', format: 'hwpx', dirty: true }));
+    saveMock.mockResolvedValue(null);
+    await expect(bridge.saveDocumentFromCommand()).resolves.toBeNull();
+    expect(saveMock).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: 'misnamed.hwpx' }));
+    expect(invokeMock).not.toHaveBeenCalledWith('prepare_staged_hwp_save', expect.anything());
+  });
+
+  it('switches an HWP document to HWPX when it is saved under an .hwpx name', async () => {
+    const bridge = new TauriBridge();
+    applyOpenResult(bridge, nativeOpenResult({ dirty: true }));
+    saveMock.mockResolvedValue('/tmp/converted.HWPX');
+    const handle = writeHandle();
+    fsOpenMock.mockResolvedValue(handle);
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === 'check_external_modification') return { changed: false };
+      if (command === 'prepare_staged_hwp_save') { expect(args).toEqual({ targetPath: '/tmp/converted.HWPX' }); return '/tmp/converted.HWPX.hop-save-3.tmp'; }
+      if (command === 'commit_staged_hwp_save') return { docId: 'doc-1', sourcePath: '/tmp/converted.HWPX', format: 'hwpx', revision: 2, dirty: false, warnings: [] };
+      return undefined;
+    });
+    await expect(bridge.saveDocumentAsFromCommand()).resolves.toMatchObject({ format: 'hwpx' });
+    expect(handle.write).toHaveBeenCalledWith(new Uint8Array([0x50, 0x4b, 7]));
+    expect(bridge.getSourceFormat()).toBe('hwpx');
+    expect(bridge.fileName).toBe('converted.HWPX');
+    expect(bridge.hasUnsavedChanges()).toBe(false);
   });
 
   it.each([false, true])('saves HWP bytes through native state with encryption guard %s', async (encrypted) => {
@@ -542,7 +634,7 @@ describe('TauriBridge', () => {
     expect(bridge.requiresPasswordForSave).toBe(false);
     expect(result?.revision).toBe(6);
     expect(bridge.hasUnsavedChanges()).toBe(false);
-    expect(document.title).toBe('report.hwp - HOP');
+    expect(document.title).toBe('report.hwp - Achmage HOP');
   });
 
   it('writes large staged saves in multiple fs chunks', async () => {
@@ -589,6 +681,62 @@ describe('TauriBridge', () => {
     expect(writes[0]?.[0][0]).toBe(1);
     expect(writes[1]?.[0].byteLength).toBe(5);
     expect(writes[1]?.[0][4]).toBe(9);
+  });
+
+  it('asks before a save that would drop content and writes nothing when cancelled', async () => {
+    const bridge = new TauriBridge();
+    const handle = writeHandle();
+    fsOpenMock.mockResolvedValue(handle);
+    (bridge as unknown as { contentLossMock: ReturnType<typeof vi.fn> }).contentLossMock.mockReturnValue({
+      schemaVersion: 1, outputFormat: 'hwp', count: 2,
+      losses: [
+        { code: 'binaryContentEmptied', path: 'bin/BIN0001', resourceId: 1 },
+        { code: 'controlOmitted', path: 'section0/p3' },
+      ],
+    });
+    applyOpenResult(bridge, { docId: 'doc-1', fileName: 'source.hwp', sourcePath: '/tmp/source.hwp', format: 'hwp', pageCount: 1, revision: 5, dirty: true, warnings: [] });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'check_external_modification') return { changed: false };
+      if (command === 'prepare_staged_hwp_save') return '/tmp/source.hwp.hop-save-loss.tmp';
+      throw new Error(`unexpected command ${command}`);
+    });
+    messageMock.mockResolvedValueOnce('취소');
+
+    await expect(bridge.saveDocumentFromCommand()).resolves.toBeNull();
+
+    const [text, options] = messageMock.mock.calls.at(-1) as [string, { buttons: { ok: string } }];
+    expect(text).toContain('그림·첨부 데이터가 비워짐 #1 (bin/BIN0001)');
+    expect(text).toContain('개체가 빠짐 (section0/p3)');
+    expect(options.buttons.ok).toBe('그대로 저장');
+    expect(handle.write).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith('commit_staged_hwp_save', expect.anything());
+    expect(removeMock).toHaveBeenCalledWith('/tmp/source.hwp.hop-save-loss.tmp');
+    expect(bridge.hasUnsavedChanges()).toBe(true);
+  });
+
+  it('saves anyway when the user accepts the reported loss', async () => {
+    const bridge = new TauriBridge();
+    const handle = writeHandle();
+    const bytes = new Uint8Array([1, 2, 3]);
+    fsOpenMock.mockResolvedValue(handle);
+    statMock.mockResolvedValue({ size: bytes.length, isFile: true });
+    (bridge as unknown as { contentLossMock: ReturnType<typeof vi.fn> }).contentLossMock.mockReturnValue({
+      schemaVersion: 1, outputFormat: 'hwp', count: 1, losses: [{ code: 'metadataReduced', path: 'section0/p1/field0' }],
+    });
+    applyOpenResult(bridge, { docId: 'doc-1', fileName: 'source.hwp', sourcePath: '/tmp/source.hwp', format: 'hwp', pageCount: 1, revision: 5, dirty: true, warnings: [] });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'check_external_modification') return { changed: false };
+      if (command === 'prepare_staged_hwp_save') return '/tmp/source.hwp.hop-save-ok.tmp';
+      if (command === 'commit_staged_hwp_save') return { docId: 'doc-1', sourcePath: '/tmp/source.hwp', format: 'hwp', revision: 6, dirty: false, warnings: [] };
+      if (command === 'note_finder_recent_document') return undefined;
+      throw new Error(`unexpected command ${command}`);
+    });
+    messageMock.mockResolvedValueOnce('그대로 저장');
+
+    const result = await bridge.saveDocumentFromCommand();
+
+    expect(handle.write).toHaveBeenCalled();
+    expect(result?.revision).toBe(6);
   });
 
   it('rejects staged saves before native commit when the written file size is incomplete', async () => {
@@ -662,6 +810,29 @@ describe('TauriBridge', () => {
     });
     expect(handle.write).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
     expect(removeMock).toHaveBeenCalledWith('/tmp/report.pdf.hop-export-abcd1234.hwp');
+  });
+
+  it('asks before a PDF export that would drop content and makes no PDF when cancelled', async () => {
+    const bridge = new TauriBridge();
+    const handle = writeHandle();
+    fsOpenMock.mockResolvedValue(handle);
+    saveMock.mockResolvedValue('/tmp/report');
+    (bridge as unknown as { contentLossMock: ReturnType<typeof vi.fn> }).contentLossMock.mockReturnValue({ schemaVersion: 1, outputFormat: 'hwp', count: 1, losses: [{ code: 'controlOmitted', path: 'section0/p2' }] });
+    applyOpenResult(bridge, { docId: 'doc-1', fileName: 'source.hwp', sourcePath: '/tmp/source.hwp', format: 'hwp', pageCount: 1, revision: 5, dirty: false, warnings: [] });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'prepare_staged_hwp_pdf_export') return '/tmp/report.pdf.hop-export-loss.hwp';
+      throw new Error(`unexpected command ${command}`);
+    });
+    messageMock.mockResolvedValueOnce('취소');
+
+    await expect(bridge.exportPdfFromCommand()).resolves.toBeNull();
+
+    const [text, options] = messageMock.mock.calls.at(-1) as [string, { title: string; buttons: { ok: string } }];
+    expect(text).toContain('PDF는 HWP로 바꾼 뒤');
+    expect(options.buttons.ok).toBe('그대로 내보내기');
+    expect(handle.write).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith('export_pdf_from_hwp_path', expect.anything());
+    expect(removeMock).toHaveBeenCalledWith('/tmp/report.pdf.hop-export-loss.hwp');
   });
 
   it('removes the staged export file when PDF export fails', async () => {

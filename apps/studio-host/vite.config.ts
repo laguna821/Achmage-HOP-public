@@ -7,6 +7,10 @@ import { createHopOverrides } from './hop-overrides.ts';
 const desktopConfig = JSON.parse(
   readFileSync(resolve(import.meta.dirname, '../desktop/src-tauri/tauri.conf.json'), 'utf-8'),
 );
+// Achmage HOP's own release version (the upstream HOP version above stays the base it is built on).
+const achmageReleaseConfig = JSON.parse(
+  readFileSync(resolve(import.meta.dirname, '../desktop/src-tauri/tauri.achmage.release.conf.json'), 'utf-8'),
+);
 const upstreamStudioDir = resolve(import.meta.dirname, '../../third_party/rhwp/rhwp-studio');
 const upstreamSrc = resolve(import.meta.dirname, '../../third_party/rhwp/rhwp-studio/src');
 const hopSrc = resolve(import.meta.dirname, 'src');
@@ -64,6 +68,7 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(rhwpWasmPackage.version),
     __HOP_VERSION__: JSON.stringify(desktopConfig.version),
+    __ACHMAGE_VERSION__: JSON.stringify(achmageReleaseConfig.version),
   },
   resolve: {
     alias: [

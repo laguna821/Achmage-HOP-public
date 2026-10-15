@@ -1,0 +1,178 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hop-workbench <hop@localhost>
+Date: Thu, 15 Oct 2026 17:36:30 +0900
+Subject: [PATCH 05/12] hop-line-break-size
+
+
+diff --git a/src/renderer/composer/line_breaking.rs b/src/renderer/composer/line_breaking.rs
+index 45730d1f10df49533f49eb738bbf6f9bea116645..dce879f0fa08782dad32ddf9eda5226f95029a60 100644
+--- a/src/renderer/composer/line_breaking.rs
++++ b/src/renderer/composer/line_breaking.rs
+@@ -114,7 +114,10 @@ pub(crate) enum BreakToken {
+     /// 탭 (줄 바꿈 가능 지점, 폭은 줄 위치에 따라 동적)
+     Tab { idx: usize, max_font_size: f64 },
+     /// 강제 줄 바꿈 (\n)
+-    LineBreak { idx: usize },
++    ///
++    /// [HOP patch] `max_font_size` is the break character's own size: Hancom 2024 makes a 10 pt line that ends
++    /// with a 12 pt line break as tall as a 12 pt line (as rhwp already does for a 12 pt space).
++    LineBreak { idx: usize, max_font_size: f64 },
+ }
+ 
+ /// 글자처럼 취급되는 인라인 제어문의 문단 내 위치와 물리 크기.
+@@ -405,7 +408,16 @@ fn tokenize_paragraph_with_regenerated_space_metric(
+ 
+         // 강제 줄 바꿈
+         if ch == '\n' {
+-            tokens.push(BreakToken::LineBreak { idx: i });
++            let utf16_pos = if i < char_offsets.len() {
++                char_offsets[i]
++            } else {
++                i as u32
++            };
++            let style_id = find_active_char_shape(char_shapes, utf16_pos);
++            tokens.push(BreakToken::LineBreak {
++                idx: i,
++                max_font_size: token_line_font_size(styles, style_id),
++            });
+             i += 1;
+             continue;
+         }
+@@ -1564,7 +1576,7 @@ impl FillCursor {
+             BreakToken::Text { end_idx, .. } => *end_idx <= boundary,
+             BreakToken::Space { idx, .. }
+             | BreakToken::Tab { idx, .. }
+-            | BreakToken::LineBreak { idx } => *idx < boundary,
++            | BreakToken::LineBreak { idx, .. } => *idx < boundary,
+         });
+         if let Some(BreakToken::Text { start_idx, .. }) = tokens.get(cursor.token_index) {
+             if boundary > *start_idx {
+@@ -1703,7 +1715,7 @@ fn fill_one_interval(
+                     BreakToken::Text { end_idx, .. } => *end_idx,
+                     BreakToken::Space { idx, .. }
+                     | BreakToken::Tab { idx, .. }
+-                    | BreakToken::LineBreak { idx } => *idx + 1,
++                    | BreakToken::LineBreak { idx, .. } => *idx + 1,
+                 })
+                 .unwrap_or(text_chars.len());
+ 
+@@ -1737,11 +1749,11 @@ fn fill_one_interval(
+ 
+         let ti = cursor.token_index;
+         match &tokens[ti] {
+-            BreakToken::LineBreak { idx } => {
++            BreakToken::LineBreak { idx, max_font_size } => {
+                 let result = LineBreakResult {
+                     start_idx: cursor.line_start_idx,
+                     end_idx: *idx + 1,
+-                    max_font_size: cursor.line_max_fs,
++                    max_font_size: cursor.line_max_fs.max(*max_font_size),
+                     has_line_break: true,
+                 };
+                 cursor.line_start_idx = *idx + 1;
+@@ -2219,11 +2231,11 @@ fn fill_lines_before_cursor(
+ 
+     for (ti, token) in tokens.iter().enumerate() {
+         match token {
+-            BreakToken::LineBreak { idx } => {
++            BreakToken::LineBreak { idx, max_font_size } => {
+                 results.push(LineBreakResult {
+                     start_idx: line_start_idx,
+                     end_idx: *idx + 1,
+-                    max_font_size: line_max_fs,
++                    max_font_size: line_max_fs.max(*max_font_size),
+                     has_line_break: true,
+                 });
+                 line_start_idx = *idx + 1;
+@@ -2450,7 +2462,7 @@ fn fill_lines_before_cursor(
+             BreakToken::Text { end_idx, .. } => *end_idx,
+             BreakToken::Space { idx, .. }
+             | BreakToken::Tab { idx, .. }
+-            | BreakToken::LineBreak { idx } => *idx + 1,
++            | BreakToken::LineBreak { idx, .. } => *idx + 1,
+         })
+         .unwrap_or(text_chars.len());
+ 
+@@ -4521,7 +4533,7 @@ fn reflow_line_segs_impl(
+         BreakToken::Text { start_idx, .. } => *start_idx,
+         BreakToken::Space { idx, .. }
+         | BreakToken::Tab { idx, .. }
+-        | BreakToken::LineBreak { idx } => *idx,
++        | BreakToken::LineBreak { idx, .. } => *idx,
+     };
+     let mut preserved_prefix = Vec::new();
+     let mut reflow_start_idx = 0usize;
+@@ -5290,7 +5302,10 @@ mod fill_cursor_tests {
+                 base_char_widths: vec![10.0],
+                 char_widths: vec![10.0],
+             },
+-            BreakToken::LineBreak { idx: 6 },
++            BreakToken::LineBreak {
++                idx: 6,
++                max_font_size: 12.0,
++            },
+             BreakToken::Text {
+                 start_idx: 7,
+                 end_idx: 9,
+@@ -5325,6 +5340,48 @@ mod fill_cursor_tests {
+     }
+ }
+ 
++#[cfg(test)]
++mod hop_line_break_size_tests {
++    use super::*;
++
++    /// [HOP patch] "FIRST10 " at 10 pt then a 12 pt line break: the first line is a 12 pt line.
++    #[test]
++    fn larger_line_break_raises_its_line() {
++        let text_chars = "ab \ncd".chars().collect::<Vec<_>>();
++        let text = |start_idx: usize| BreakToken::Text {
++            start_idx,
++            end_idx: start_idx + 2,
++            base_width: 20.0,
++            width: 20.0,
++            max_font_size: 10.0,
++            base_char_widths: vec![10.0, 10.0],
++            char_widths: vec![10.0, 10.0],
++        };
++        let tokens = vec![
++            text(0),
++            BreakToken::Space {
++                idx: 2,
++                width: 5.0,
++                condense_base: 5.0,
++                max_font_size: 10.0,
++                has_inline_control: false,
++            },
++            BreakToken::LineBreak {
++                idx: 3,
++                max_font_size: 12.0,
++            },
++            text(4),
++        ];
++        for lines in [
++            fill_lines_before_cursor(&tokens, &text_chars, 200.0, 0.0, 48.0, 0, 0, 0, true),
++            fill_lines(&tokens, &text_chars, 200.0, 0.0, 48.0, 0.0, 0, 0, &[], 0, true, None),
++        ] {
++            let sizes: Vec<_> = lines.iter().map(|l| (l.end_idx, l.max_font_size)).collect();
++            assert_eq!(sizes, vec![(4, 12.0), (6, 10.0)]);
++        }
++    }
++}
++
+ #[cfg(test)]
+ mod frame_reflow_tests {
+     use super::*;
+diff --git a/src/renderer/composer/tests.rs b/src/renderer/composer/tests.rs
+index 7ce3e3d6dc676dd88d53bf225593a1c0976ff3e5..ad998b1ab9190cf59ebcb6ce0fcd2842dc158722 100644
+--- a/src/renderer/composer/tests.rs
++++ b/src/renderer/composer/tests.rs
+@@ -1856,7 +1856,7 @@ fn test_tokenize_line_break() {
+ 
+     let tokens = tokenize_paragraph(&text, &offsets, &shapes, &styles, 0, 0);
+     assert_eq!(tokens.len(), 3);
+-    assert!(matches!(tokens[1], BreakToken::LineBreak { idx: 1 }));
++    assert!(matches!(tokens[1], BreakToken::LineBreak { idx: 1, .. }));
+ }
+ 
+ // ─── Task #555: PUA 옛한글 → 자모 변환 후 폰트 매트릭스 ───

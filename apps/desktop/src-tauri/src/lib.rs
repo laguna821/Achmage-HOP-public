@@ -1,4 +1,10 @@
 mod app_quit;
+mod achmage_ai;
+mod achmage_research;
+mod achmage_runtime;
+mod achmage_telegram;
+mod kordoc;
+mod kordoc_process;
 mod commands;
 mod font_catalog;
 #[cfg(target_os = "linux")]
@@ -18,9 +24,7 @@ mod windows;
 
 use std::path::{Path, PathBuf};
 use std::{env, ffi::OsStr};
-#[cfg(target_os = "macos")]
-use tauri::RunEvent;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, RunEvent};
 
 use commands::{
     cancel_app_quit, check_external_modification, clear_recent_documents, close_document,
@@ -39,9 +43,30 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     linux_runtime::apply_linux_runtime_fixes();
 
+    // `--background` (login autostart for Telegram): no window, only the tray and the gateway.
+    let background = achmage_telegram::is_background_launch(env::args_os());
+    let mut context = tauri::generate_context!();
+    if background {
+        for window in &mut context.config_mut().app.windows {
+            window.create = false;
+        }
+    }
+
     let app = tauri::Builder::default()
         .enable_macos_default_menu(false)
         .manage(AppState::default())
+        .manage(achmage_ai::AiState::default())
+        .manage(achmage_research::ResearchState::default())
+        .manage(achmage_runtime::RuntimeState::default())
+        .manage(kordoc::KordocState::default())
+        .on_window_event(|window,event| {
+            achmage_telegram::on_window_event(window.app_handle(), window.label(), event);
+            if matches!(event,tauri::WindowEvent::Destroyed) {
+                achmage_ai::close(&window.state::<achmage_ai::AiState>(),window.label());
+                achmage_research::close(&window.state::<achmage_research::ResearchState>(),window.label());
+                kordoc::close(&window.state::<kordoc::KordocState>(),window.label());
+            }
+        })
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -50,11 +75,21 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let paths = document_paths_from_args(&args, &cwd);
+            // HOP may run only in the tray (Telegram background mode); a relaunch shows a window.
+            let no_windows = app.webview_windows().is_empty();
             if paths.is_empty() {
+                if no_windows && !achmage_telegram::is_background_launch(&args) {
+                    achmage_telegram::show_window(app);
+                }
                 return;
             }
             #[cfg(target_os = "macos")]
-            queue_open_paths(app, paths);
+            {
+                queue_open_paths(app, paths);
+                if no_windows {
+                    achmage_telegram::show_window(app);
+                }
+            }
             #[cfg(not(target_os = "macos"))]
             {
                 let app = app.clone();
@@ -63,7 +98,7 @@ pub fn run() {
                 });
             }
         }))
-        .setup(|app| {
+        .setup(move |app| {
             #[cfg(target_os = "macos")]
             menu::install(app)?;
             #[cfg(not(target_os = "macos"))]
@@ -76,9 +111,26 @@ pub fn run() {
             }
             #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
             updates::install_startup_update_check(app.handle());
+            achmage_telegram::install(app.handle(), background);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            achmage_ai::achmage_ai_state,
+            achmage_ai::achmage_ai_action,
+            achmage_research::achmage_research,
+            achmage_runtime::achmage_runtime,
+            kordoc::achmage_kordoc,
+            kordoc::achmage_kordoc_prepare_generated,
+            kordoc::achmage_kordoc_open_generated,
+            achmage_telegram::achmage_telegram_status,
+            achmage_telegram::achmage_telegram_set_token,
+            achmage_telegram::achmage_telegram_clear_token,
+            achmage_telegram::achmage_telegram_set_enabled,
+            achmage_telegram::achmage_telegram_set_keep_running,
+            achmage_telegram::achmage_telegram_set_autostart,
+            achmage_telegram::achmage_telegram_approve,
+            achmage_telegram::achmage_telegram_revoke,
+            achmage_telegram::achmage_telegram_document_text,
             create_document,
             create_editor_window,
             close_document,
@@ -111,23 +163,44 @@ pub fn run() {
             start_update_install,
             restart_to_apply_update,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to build HOP desktop app");
 
-    app.run(|_app, _event| {
+    app.run(|app, event| {
+        // Telegram "keep running": closing the last window leaves HOP in the tray.
+        if let RunEvent::ExitRequested { code, api, .. } = &event {
+            if achmage_telegram::keep_running_on_exit(app, code.is_some()) {
+                api.prevent_exit();
+                return;
+            }
+        }
+        if matches!(event, RunEvent::Exit) {
+            achmage_telegram::shutdown(app);
+        }
         #[cfg(target_os = "macos")]
         {
-            let app = _app;
-            let event = _event;
-
             if let RunEvent::Opened { urls } = &event {
-                let paths = urls
+                let paths: Vec<String> = urls
                     .clone()
                     .into_iter()
                     .filter_map(|url| url.to_file_path().ok())
                     .filter_map(document_path_from_path)
                     .collect();
+                let show = !paths.is_empty() && app.webview_windows().is_empty();
                 queue_open_paths(app, paths);
+                if show {
+                    achmage_telegram::show_window(app);
+                }
+            }
+
+            if let RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = &event
+            {
+                if app.webview_windows().is_empty() {
+                    achmage_telegram::show_window(app);
+                }
             }
 
             if let Err(error) = app_quit::handle_run_event(app, &event) {

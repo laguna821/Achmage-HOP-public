@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hop-workbench <hop@localhost>
+Date: Thu, 15 Oct 2026 17:36:29 +0900
+Subject: [PATCH 03/12] hop-canvas-synthetic-bold
+
+
+diff --git a/src/renderer/canvas_text_font.rs b/src/renderer/canvas_text_font.rs
+index c5422b7328c1dbb7c082282641da356b2e3d8f9b..ceb83955dbdc9cc67128994d513353cf3e635d88 100644
+--- a/src/renderer/canvas_text_font.rs
++++ b/src/renderer/canvas_text_font.rs
+@@ -11,6 +11,8 @@ pub struct CanvasTextFont {
+     baseline: f64,
+     horizontal_scale: f64,
+     layout_ratio: f64,
++    /// [HOP patch 0003] Synthetic bold stroke width (px) when the face has no bold of its own.
++    faux_bold_stroke: Option<f64>,
+ }
+ 
+ impl CanvasTextFont {
+@@ -26,10 +28,14 @@ impl CanvasTextFont {
+         let (size, baseline) = style.script_draw_metrics(base_size, baseline);
+         let (draw_size, horizontal_scale) = condensed_ratio_draw_params(size, style.ratio);
+         let family = canvas_font_family_chain(&style.font_family);
++        // [HOP patch 0003] Hancom 2024 printouts show bold for a face without a bold of its own (e.g. Hallym Gothic, whose
++        // files each register their own family) as the regular outlines plus a 0.02 em stroke, like the SVG/PDF
++        // path. Asking the browser for "bold" would pick the Bold file or the browser's own emboldening instead.
++        let faux_bold_stroke = super::svg::faux_bold_stroke_width(style, draw_size);
+         let prefix = format!(
+             "{}{}{:.3}px ",
+             if style.italic { "italic " } else { "" },
+-            if style.bold { "bold " } else { "" },
++            if style.bold && faux_bold_stroke.is_none() { "bold " } else { "" },
+             draw_size,
+         );
+         Self {
+@@ -39,9 +45,15 @@ impl CanvasTextFont {
+             baseline,
+             horizontal_scale,
+             layout_ratio: if style.ratio > 0.0 { style.ratio } else { 1.0 },
++            faux_bold_stroke,
+         }
+     }
+ 
++    /// [HOP patch 0003] Stroke width to add after each fill for synthetic bold, in px.
++    pub fn faux_bold_stroke(&self) -> Option<f64> {
++        self.faux_bold_stroke
++    }
++
+     pub fn descriptor(&self) -> &str {
+         &self.descriptor
+     }
+diff --git a/src/renderer/svg.rs b/src/renderer/svg.rs
+index a737a03f43050ea24d832af6181727c35aee766a..20962a766210b5ad28a65fb7df8c97e4182e9833 100644
+--- a/src/renderer/svg.rs
++++ b/src/renderer/svg.rs
+@@ -4007,7 +4007,7 @@ fn path_bbox(commands: &[PathCommand]) -> (f64, f64, f64, f64) {
+ /// 메트릭 DB 에 Bold 항목이 있는 face 는 배치 advance 도 Bold 메트릭으로
+ /// 잡았으므로 종전대로 그 face 를 요청한다. DB 에 없는 face 는 어느 쪽인지
+ /// 알 근거가 없어 건드리지 않는다.
+-fn faux_bold_stroke_width(style: &TextStyle, font_size: f64) -> Option<f64> {
++pub(crate) fn faux_bold_stroke_width(style: &TextStyle, font_size: f64) -> Option<f64> {
+     /// 한/글 2022 PDF 실측 — `w / Tf`.
+     const HANCOM_FAUX_BOLD_STROKE_EM: f64 = 0.02;
+ 
+diff --git a/src/renderer/web_canvas.rs b/src/renderer/web_canvas.rs
+index 4b6fde7dbfdb40f2c0d31f85b4972b0873e4bc73..f3510e506dd4e823f088d7c306451571d0127d75 100644
+--- a/src/renderer/web_canvas.rs
++++ b/src/renderer/web_canvas.rs
+@@ -2181,6 +2181,15 @@ impl Renderer for WebCanvasRenderer {
+         let font = font_setup.descriptor();
+         let old_hangul_font = font_setup.old_hangul_descriptor();
+         self.ctx.set_font(font);
++        // [HOP patch 0003] Synthetic bold: the fill is followed by a stroke of the same colour.
++        let faux_bold = font_setup.faux_bold_stroke().map(|width| (width, color_to_css(style.color)));
++        let stroke_faux_bold = |ctx: &web_sys::CanvasRenderingContext2d, text: &str, x: f64, y: f64| {
++            if let Some((width, color)) = &faux_bold {
++                ctx.set_stroke_style_str(color);
++                ctx.set_line_width(*width);
++                let _ = ctx.stroke_text(text, x, y);
++            }
++        };
+ 
+         // 클러스터 분할
+         let clusters = split_into_clusters(text);
+@@ -2330,6 +2339,7 @@ impl Renderer for WebCanvasRenderer {
+                         );
+                         self.ctx.set_font(&fallback_font);
+                         let _ = self.ctx.fill_text(cluster_str, char_x, y);
++                        stroke_faux_bold(&self.ctx, cluster_str, char_x, y);
+                         self.ctx.restore();
+                         self.ctx.set_font(font); // 원래 폰트 복원
+                         continue;
+@@ -2352,6 +2362,7 @@ impl Renderer for WebCanvasRenderer {
+                         self.ctx.translate(char_x, y).unwrap_or(());
+                         self.ctx.scale(0.5, 1.0).unwrap_or(());
+                         let _ = self.ctx.fill_text(cluster_str, 0.0, 0.0);
++                        stroke_faux_bold(&self.ctx, cluster_str, 0.0, 0.0);
+                         self.ctx.restore();
+                     } else {
+                         let cluster_advance = {
+@@ -2391,6 +2402,7 @@ impl Renderer for WebCanvasRenderer {
+                             .scale(ratio * fit_scale.unwrap_or(1.0), 1.0)
+                             .unwrap_or(());
+                         let _ = self.ctx.fill_text(cluster_str, 0.0, 0.0);
++                        stroke_faux_bold(&self.ctx, cluster_str, 0.0, 0.0);
+                         self.ctx.restore();
+                     }
+                 }

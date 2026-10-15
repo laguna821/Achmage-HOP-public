@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import type {
   DetectLocalFontsOptions,
   GetLocalFontsOptions,
@@ -6,7 +7,11 @@ import type {
   LocalFontState,
 } from '@/upstream/local-fonts';
 import { REGISTERED_FONTS } from './font-catalog';
-import { filterAuthoringFontFamilies, isAuthoringBlockedFontFamily } from './font-authoring-policy';
+import {
+  clearLoadedLocalAuthoringFamilies, filterAuthoringFontFamilies,
+  isAuthoringBlockedFontFamily, isLoadedLocalAuthoringFamily,
+  registerLoadedLocalAuthoringFamily,
+} from './font-authoring-policy';
 
 export interface LocalFontEntry {
   family: string;
@@ -15,9 +20,12 @@ export interface LocalFontEntry {
   weight?: number;
   sourceKind: 'system-installed' | 'file-backed';
   path?: string | null;
+  /** Face number inside a TTC/OTC collection. */
+  faceIndex?: number;
 }
 
 let cachedFontEntries: LocalFontEntry[] | null = null;
+let pendingFontEntries: Promise<LocalFontEntry[]> | null = null;
 let detectedAt: string | null = null;
 let lastError: string | null = null;
 interface DesktopFontFaceState {
@@ -26,6 +34,7 @@ interface DesktopFontFaceState {
 }
 const loadedFontFaces = new Map<string, DesktopFontFaceState>();
 const fontBinaryCache = new Map<string, Promise<Uint8Array>>();
+let fontGeneration = 0;
 
 export function isDesktopTauriRuntime(): boolean {
   return typeof window !== 'undefined'
@@ -42,15 +51,31 @@ export function clearStoredDesktopFonts(): void {
 
 export async function detectDesktopFontEntries(force = false): Promise<LocalFontEntry[]> {
   if (cachedFontEntries && !force) return cachedFontEntries;
+  if (force) {
+    cachedFontEntries = null;
+    clearLoadedDesktopFontFaces();
+  }
+  if (pendingFontEntries) return pendingFontEntries;
+  const pending = readDesktopFontEntries(fontGeneration);
+  pendingFontEntries = pending;
   try {
-    const { invoke } = await import('@tauri-apps/api/core');
+    return await pending;
+  } finally {
+    // A reset/refresh may already have started a newer scan.
+    if (pendingFontEntries === pending) pendingFontEntries = null;
+  }
+}
+
+async function readDesktopFontEntries(generation: number): Promise<LocalFontEntry[]> {
+  try {
     const entries = await invoke<LocalFontEntry[]>('list_local_fonts');
-    if (force) clearLoadedDesktopFontFaces();
+    if (generation !== fontGeneration) return cachedFontEntries ?? [];
     cachedFontEntries = normalizeFontEntries(entries);
     detectedAt = new Date().toISOString();
     lastError = null;
     return cachedFontEntries;
   } catch (error) {
+    if (generation !== fontGeneration) return cachedFontEntries ?? [];
     lastError = error instanceof Error ? error.message : String(error);
     throw error;
   }
@@ -58,13 +83,15 @@ export async function detectDesktopFontEntries(force = false): Promise<LocalFont
 
 export async function detectDesktopFonts(options: DetectLocalFontsOptions = {}): Promise<string[]> {
   await detectDesktopFontEntries(options.force);
+  await ensureDesktopFontsAvailable();
   return getDesktopFonts(options);
 }
 
 export function getDesktopFontRecords(options: GetLocalFontsOptions = {}): LocalFontRecord[] {
   const records = (cachedFontEntries ?? []).map(toLocalFontRecord);
   if (options.includeRegistered) return records;
-  return records.filter((record) => !record.aliases.some((name) => REGISTERED_FONTS.has(name)));
+  return records.filter((record) => isLoadedLocalAuthoringFamily(record.family)
+    || !record.aliases.some((name) => REGISTERED_FONTS.has(name)));
 }
 
 export function getDesktopFonts(options: GetLocalFontsOptions = {}): string[] {
@@ -84,7 +111,30 @@ export function resolveDesktopFont(fontName: string): LocalFontRecord | null {
   const familyMatches = entries.filter((entry) => normalizeFontName(entry.family) === normalized);
   if (familyMatches.length === 1) return toLocalFontRecord(familyMatches[0]);
   const regularMatch = familyMatches.find((entry) => /^(normal|regular|roman|book)$/i.test(entry.style));
-  return regularMatch ? toLocalFontRecord(regularMatch) : null;
+  if (regularMatch) return toLocalFontRecord(regularMatch);
+  const fullName = familyMatches.length ? undefined : fullNameEntry(entries, fontName);
+  return fullName ? toLocalFontRecord(fullName) : null;
+}
+
+// Hancom documents often name a face by family + style ("한림고딕체 Regular", "나눔고딕 Bold").
+const STYLE_SUFFIXES: ReadonlyArray<readonly [RegExp, number]> = [
+  [/\s+(?:regular|book|roman|normal)$/i, 400], [/\s+medium$/i, 500], [/\s+(?:semibold|demibold)$/i, 600],
+  [/\s+bold$/i, 700], [/\s+(?:extrabold|ultrabold|heavy)$/i, 800], [/\s+black$/i, 900],
+  [/\s+light$/i, 300], [/\s+(?:extralight|ultralight)$/i, 200], [/\s+thin$/i, 100],
+];
+
+/** The upright face a "family style" full name refers to, preferring one whose bytes can be read. */
+export function fullNameEntry(entries: readonly LocalFontEntry[], fontName: string): LocalFontEntry | undefined {
+  const normalized = normalizeFontName(fontName);
+  for (const [suffix, weight] of STYLE_SUFFIXES) {
+    if (!suffix.test(normalized)) continue;
+    const family = normalized.replace(suffix, '');
+    const faces = entries.filter((entry) => normalizeFontName(entry.family) === family && !/italic|oblique/i.test(entry.style));
+    const exact = faces.filter((entry) => (entry.weight ?? 400) === weight);
+    const pool = exact.length ? exact : weight === 400 ? faces.filter((entry) => entry.weight === undefined) : [];
+    return pool.find((entry) => entry.sourceKind === 'file-backed' && entry.path) ?? pool.find((entry) => entry.path) ?? pool[0];
+  }
+  return undefined;
 }
 
 export async function loadDesktopFontBytesFor(
@@ -135,6 +185,9 @@ export function resetDesktopFonts(): void {
 }
 
 function clearLoadedDesktopFontFaces(): void {
+  fontGeneration += 1;
+  pendingFontEntries = null;
+  clearLoadedLocalAuthoringFamilies();
   if (typeof document !== 'undefined' && document.fonts) {
     for (const state of loadedFontFaces.values()) {
       if (state.face) document.fonts.delete?.(state.face);
@@ -148,6 +201,7 @@ export async function ensureDesktopFontsAvailable(
   targetFamilies?: Iterable<string>,
 ): Promise<Set<string>> {
   const entries = await detectDesktopFontEntries();
+  const generation = fontGeneration;
   const available = new Set(entries
     .filter((entry) => entry.sourceKind === 'system-installed')
     .filter((entry) => !isAuthoringBlockedFontFamily(entry.family))
@@ -159,30 +213,54 @@ export async function ensureDesktopFontsAvailable(
     entry.sourceKind === 'file-backed' && Boolean(entry.path) && requested.has(entry.family),
   ));
   await Promise.all([...groups].map(async ([path, pathEntries]) => {
+    if (pathEntries.every((entry) => loadedFontFaces.get(fontEntryKey(entry))?.face)) {
+      for (const entry of pathEntries) available.add(entry.family);
+      return;
+    }
     let fontBytes: Uint8Array;
     try {
       fontBytes = await readDesktopFontBytes(path);
     } catch {
       return;
     }
+    if (generation !== fontGeneration) return;
     for (const entry of pathEntries) {
       try {
         if (!await ensureDesktopFontFace(entry, fontBytes)) continue;
       } catch {
         continue;
       }
+      if (generation !== fontGeneration) return;
       if (!isAuthoringBlockedFontFamily(entry.family)) available.add(entry.family);
     }
   }));
-  return available;
+  // A full name the catalog has no family for is loaded from its face's file under that exact name,
+  // so the editor draws "한림고딕체 Regular" with the installed 한림고딕체 instead of a fallback.
+  const fullNames = [...requested]
+    .filter((name) => !entries.some((entry) => entry.family === name))
+    .map((name) => [name, fullNameEntry(entries, name)] as const)
+    .filter((pair): pair is readonly [string, LocalFontEntry] => !!pair[1]);
+  await Promise.all(fullNames.map(async ([name, entry]) => {
+    try {
+      // File-backed faces load from their bytes; a face only installed in Windows is referenced by local().
+      const loaded = entry.sourceKind === 'file-backed' && entry.path
+        ? await ensureDesktopFontFace({ ...entry, family: name }, await readDesktopFontBytes(entry.path))
+        : await ensureDesktopFontFace({ ...entry, family: name }, `local("${entry.postScriptName.replace(/["\\]/g, '')}")`);
+      if (generation !== fontGeneration) return;
+      if (loaded && !isAuthoringBlockedFontFamily(name)) available.add(name);
+    } catch {
+      // An unreadable face keeps the CSS fallback, as for any missing font.
+    }
+  }));
+  return generation === fontGeneration ? available : new Set();
 }
 
 async function readDesktopFontBytes(path: string): Promise<Uint8Array> {
   let pending = fontBinaryCache.get(path);
   if (!pending) {
     pending = (async () => {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return new Uint8Array(await invoke<number[]>('read_local_font', { path }));
+      // The desktop command answers with raw bytes (an ArrayBuffer), not a JSON number array.
+      return new Uint8Array(await invoke<ArrayBuffer | number[]>('read_local_font', { path }));
     })();
     fontBinaryCache.set(path, pending);
     void pending.then(
@@ -193,7 +271,7 @@ async function readDesktopFontBytes(path: string): Promise<Uint8Array> {
   return pending;
 }
 
-async function ensureDesktopFontFace(entry: LocalFontEntry, bytes: Uint8Array): Promise<boolean> {
+async function ensureDesktopFontFace(entry: LocalFontEntry, bytes: Uint8Array | string): Promise<boolean> {
   const key = fontEntryKey(entry);
   let state = loadedFontFaces.get(key);
   if (!state) {
@@ -211,14 +289,15 @@ async function ensureDesktopFontFace(entry: LocalFontEntry, bytes: Uint8Array): 
   if (!state.face) {
     document.fonts.add(face);
     state.face = face;
+    registerLoadedLocalAuthoringFamily(entry.family);
   }
   return true;
 }
 
-async function loadDesktopFontFace(entry: LocalFontEntry, bytes: Uint8Array): Promise<FontFace> {
+async function loadDesktopFontFace(entry: LocalFontEntry, source: Uint8Array | string): Promise<FontFace> {
   const descriptors: FontFaceDescriptors = { style: entry.style || 'normal' };
   if (entry.weight) descriptors.weight = String(entry.weight);
-  const face = new FontFace(entry.family, bytes.slice(), descriptors);
+  const face = new FontFace(entry.family, typeof source === 'string' ? source : source.slice(), descriptors);
   return face.load();
 }
 
@@ -234,6 +313,7 @@ function normalizeFontEntries(entries: LocalFontEntry[]): LocalFontEntry[] {
       weight: entry.weight,
       sourceKind: entry.sourceKind ?? 'system-installed',
       path: entry.path ?? null,
+      faceIndex: entry.faceIndex ?? 0,
     };
     byKey.set(fontEntryKey(normalized), normalized);
   }
@@ -267,9 +347,8 @@ function desktopSnapshot(): LocalFontSnapshot {
 
 function resolveRequestedFamilies(entries: LocalFontEntry[], targetFamilies?: Iterable<string>): Set<string> {
   const families = targetFamilies ? Array.from(targetFamilies) : entries.map((entry) => entry.family);
-  return new Set(families.map((family) => family.trim()).filter((family) =>
-    family && !isAuthoringBlockedFontFamily(family),
-  ));
+  // Try authorized file-backed bytes before applying the authoring policy.
+  return new Set(families.map((family) => family.trim()).filter(Boolean));
 }
 
 function groupEntriesByPath(entries: LocalFontEntry[]): Map<string, LocalFontEntry[]> {

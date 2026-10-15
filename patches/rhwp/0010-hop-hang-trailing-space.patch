@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hop-workbench <hop@localhost>
+Date: Thu, 15 Oct 2026 17:36:31 +0900
+Subject: [PATCH 10/12] hop-hang-trailing-space
+
+
+diff --git a/src/renderer/layout/paragraph_layout.rs b/src/renderer/layout/paragraph_layout.rs
+index c585b32a626aaf8060249e848788c1cfd172480e..95ba975a7fc13fd15db32f724b7c56fc942e9ab8 100644
+--- a/src/renderer/layout/paragraph_layout.rs
++++ b/src/renderer/layout/paragraph_layout.rs
+@@ -6332,7 +6332,10 @@ impl LayoutEngine {
+                     false,
+                     needs_distribute,
+                     has_tabs,
+-                    renders_synthetic_wrap_trailing_space,
++                    // [HOP patch 0010] 한글 2024는 줄 끝 공백을 오른쪽 여백 밖에 매단다. 합성 줄도
++                    // 저장 줄(#5679)처럼 양쪽 정렬 여분을 줄 안 공백에만 나눠 마지막 글자가
++                    // 오른쪽 끝에 닿게 한다(한글 2024 인쇄 결과와 비교: 줄마다 7–14pt 모자라던 차이).
++                    false,
+                     suppress_cell_overflow_spacing,
+                     converge_auto_shrink_cell,
+                     total_char_count,
+@@ -7406,7 +7409,8 @@ impl LayoutEngine {
+         // 말미 공백). 분모에 말미 공백을 넣는 synthetic-wrap 모드는 제외.
+         let line_trailing_space_by_run: Vec<usize> = {
+             let mut counts = vec![0usize; comp_line.runs.len()];
+-            if !renders_synthetic_wrap_trailing_space && extra_word_sp != 0.0 {
++            // [HOP patch 0010] 합성 줄의 줄 끝 공백도 여분을 받지 않는다(위 compute_line_extra_spacing 호출).
++            if extra_word_sp != 0.0 {
+                 let mut budget = comp_line
+                     .runs
+                     .iter()

@@ -1,0 +1,19 @@
+{
+  "name": "@achmage/kordoc-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "start": "node worker.mjs"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "0.9.12",
+    "jszip": "3.10.1",
+    "kordoc": "4.21.31",
+    "markdown-it": "14.3.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

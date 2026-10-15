@@ -1,0 +1,283 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hop-workbench <hop@localhost>
+Date: Thu, 15 Oct 2026 17:36:32 +0900
+Subject: [PATCH 11/12] hop-tab-justify
+
+
+diff --git a/src/renderer/layout/paragraph_layout.rs b/src/renderer/layout/paragraph_layout.rs
+index 95ba975a7fc13fd15db32f724b7c56fc942e9ab8..8b2749abb95edbabe549f8501a273ebfc6688a75 100644
+--- a/src/renderer/layout/paragraph_layout.rs
++++ b/src/renderer/layout/paragraph_layout.rs
+@@ -1309,6 +1309,8 @@ struct EquationTacLineVars {
+ /// [#2003] run 방출 루프의 줄-스코프 읽기 스칼라 묶음.
+ #[derive(Clone, Copy)]
+ struct RunEmitVars {
++    /// [HOP patch 0011]
++    hop_tab: Option<HopTabJustify>,
+     stored_tac_assignment: bool,
+     trailing_space_limit: usize,
+     baseline: f64,
+@@ -1470,6 +1472,45 @@ fn trailing_space_limit_after_last_inline_object(
+     })
+ }
+ 
++/// [HOP patch 0011] 한글 2024의 탭이 든 양쪽 정렬 줄 [한글 2024 인쇄 결과와 비교]:
++/// 여분은 줄 안 마지막 탭 뒤 공백에만 나누고 탭 앞 공백은 자연 폭이다. 기본 탭 폭이 0인 구역에서는
++/// 줄 끝의 공백·탭을 모두 오른쪽 여백 밖에 매단다. 위치는 줄의 그려지는 텍스트 기준이다.
++#[derive(Clone, Copy, Debug, PartialEq)]
++struct HopTabJustify {
++    /// 여분을 받는 첫 글자 위치(마지막 줄 안 탭 다음, 없으면 0)
++    from: usize,
++    eligible_spaces: usize,
++    /// 매다는 말미 글자 수(공백·탭)와 그 가운데 공백 수
++    trailing_len: usize,
++    trailing_spaces: usize,
++}
++
++fn hop_tab_justify(
++    chars: &[char],
++    trailing_space_limit: usize,
++    zero_width_tabs: bool,
++) -> Option<HopTabJustify> {
++    let trailing_len = chars
++        .iter()
++        .rev()
++        .take_while(|c| **c == ' ' || (zero_width_tabs && **c == '\t'))
++        .count()
++        .min(trailing_space_limit);
++    let (visible, trailing) = chars.split_at(chars.len() - trailing_len);
++    let last_tab = visible.iter().rposition(|c| *c == '\t');
++    if last_tab.is_none() && !trailing.contains(&'\t') {
++        return None;
++    }
++    let from = last_tab.map_or(0, |tab| tab + 1);
++    let eligible_spaces = visible[from..].iter().filter(|c| **c == ' ').count();
++    (eligible_spaces > 0).then(|| HopTabJustify {
++        from,
++        eligible_spaces,
++        trailing_len,
++        trailing_spaces: trailing.iter().filter(|c| **c == ' ').count(),
++    })
++}
++
+ fn tac_offsets_for_line_width(
+     comp: &ComposedParagraph,
+     tac_offsets_px: &[(usize, f64, usize)],
+@@ -2114,6 +2155,7 @@ fn compute_line_extra_spacing(
+     total_text_width: f64,
+     available_width: f64,
+     tab_width: f64,
++    hop_tab: Option<HopTabJustify>,
+ ) -> (f64, f64, f64) {
+     // 음수 자간은 마지막 글자의 advance도 줄이지만 실제 glyph 잉크 폭은 줄이지 않는다.
+     // 나눔정렬에서 advance만 셀 끝에 맞추면 정상 폭으로 그린 마지막 glyph가 clip을
+@@ -2248,17 +2290,28 @@ fn compute_line_extra_spacing(
+             .iter()
+             .flat_map(|r| effective_text_for_metrics(r).chars())
+             .collect();
+-        let trailing_spaces = all_chars
+-            .iter()
+-            .rev()
+-            .take_while(|c| **c == ' ')
+-            .count()
+-            .min(trailing_space_limit);
+-        let visible_count = all_chars.len() - trailing_spaces;
+-        let interior_spaces = all_chars[..visible_count]
+-            .iter()
+-            .filter(|c| **c == ' ')
+-            .count();
++        // [HOP patch 0011] 탭이 든 줄은 말미(공백·폭 0 탭)를 매달고 마지막 탭 뒤 공백에만 나눈다.
++        let (trailing_spaces, visible_count, interior_spaces) = match hop_tab {
++            Some(hop) => (
++                hop.trailing_spaces,
++                all_chars.len() - hop.trailing_len,
++                hop.eligible_spaces,
++            ),
++            None => {
++                let trailing_spaces = all_chars
++                    .iter()
++                    .rev()
++                    .take_while(|c| **c == ' ')
++                    .count()
++                    .min(trailing_space_limit);
++                let visible_count = all_chars.len() - trailing_spaces;
++                let interior_spaces = all_chars[..visible_count]
++                    .iter()
++                    .filter(|c| **c == ' ')
++                    .count();
++                (trailing_spaces, visible_count, interior_spaces)
++            }
++        };
+         let leader_dashes = count_dash_leaders(&all_chars[..visible_count]);
+         if interior_spaces > 0 {
+             // 후행 공백 폭 계산
+@@ -6304,6 +6357,19 @@ impl LayoutEngine {
+                     .map(|(pos, _, _)| *pos)
+                     .max(),
+             );
++            // [HOP patch 0011] 각주·인라인 개체가 없는 양쪽 정렬 줄만 (run이 조각으로 나뉘지 않아야 위치가 맞다).
++            let hop_tab = (needs_justify
++                && line_tac_offsets_for_width.is_empty()
++                && composed.footnote_positions.is_empty())
++            .then(|| {
++                let chars: Vec<char> = comp_line
++                    .runs
++                    .iter()
++                    .flat_map(|r| effective_text_for_metrics(r).chars())
++                    .collect();
++                hop_tab_justify(&chars, trailing_space_limit, tab_width < 0.01)
++            })
++            .flatten();
+             let (extra_word_sp, extra_char_sp, extra_dash_sp) = if is_hancom_company_pua_logo_line {
+                 // 이 줄의 trailing space는 뒤의 treat-as-char logo 그림 앞 공백이다.
+                 // 회사명 자체에는 자간을 추가하지 않고 이 공백 하나가 남는 폭을 전부
+@@ -6342,6 +6408,7 @@ impl LayoutEngine {
+                     total_text_width,
+                     available_width,
+                     tab_width,
++                    hop_tab,
+                 )
+             };
+ 
+@@ -6621,6 +6688,7 @@ impl LayoutEngine {
+                 col_area,
+                 &mut kerning_layout_session,
+                 RunEmitVars {
++                    hop_tab,
+                     stored_tac_assignment: stored_tac_assignment.is_some(),
+                     trailing_space_limit,
+                     baseline,
+@@ -7342,6 +7410,7 @@ impl LayoutEngine {
+         st: RunEmitState,
+     ) -> RunEmitState {
+         let RunEmitVars {
++            hop_tab,
+             stored_tac_assignment,
+             trailing_space_limit,
+             baseline,
+@@ -7438,6 +7507,24 @@ impl LayoutEngine {
+             }
+             counts
+         };
++        // [HOP patch 0011] 줄 기준 여분 시작 위치를 run 텍스트 기준으로 옮긴다(MAX = 이 run의 공백은 여분 없음).
++        let hop_word_spacing_from_by_run: Vec<usize> = {
++            let mut start = 0usize;
++            comp_line
++                .runs
++                .iter()
++                .map(|r| {
++                    let len = effective_text_for_metrics(r).chars().count();
++                    let from = match hop_tab {
++                        Some(hop) if hop.from >= start + len => usize::MAX,
++                        Some(hop) => hop.from.saturating_sub(start),
++                        None => 0,
++                    };
++                    start += len;
++                    from
++                })
++                .collect()
++        };
+         for (run_idx, run) in comp_line.runs.iter().enumerate() {
+             // 조판부호: 이 run 시작 위치 이전의 도형 마커를 먼저 삽입
+             for (smi, (spos, stext)) in shape_markers.iter().enumerate() {
+@@ -7656,6 +7743,7 @@ impl LayoutEngine {
+             }
+             text_style.line_x_offset = x - col_area.x;
+             text_style.extra_word_spacing = extra_word_sp;
++            text_style.hop_word_spacing_from = hop_word_spacing_from_by_run[run_idx];
+             text_style.extra_char_spacing = extra_char_sp;
+             text_style.extra_dash_advance = extra_dash_sp;
+             // [Task #874 #2] composer lang split (예: "F3→Alt+I" → "F3"/"→"/"Alt+I")
+@@ -10476,6 +10564,7 @@ mod issue_2809_split_alignment_tests {
+             30.0,
+             90.0,
+             40.0,
++            None,
+         );
+ 
+         assert!((extra_word - 30.0).abs() < 0.001);
+@@ -10513,6 +10602,7 @@ mod issue_2809_split_alignment_tests {
+             natural_width,
+             available_width,
+             40.0,
++            None,
+         );
+         let mut distributed_style = text_style;
+         distributed_style.extra_word_spacing = extra_word;
+@@ -10553,6 +10643,7 @@ mod issue_2809_split_alignment_tests {
+             total_text_width,
+             90.0,
+             40.0,
++            None,
+         );
+ 
+         let mut distributed_style = text_style.clone();
+@@ -10603,6 +10694,7 @@ mod issue_2809_split_alignment_tests {
+             62.5,
+             481.8,
+             40.0,
++            None,
+         );
+         assert_eq!(extra_word, 0.0);
+         assert_eq!(extra_char, 0.0);
+@@ -10626,6 +10718,7 @@ mod issue_2809_split_alignment_tests {
+             62.5,
+             481.8,
+             40.0,
++            None,
+         );
+         assert!(extra_char_mid > 0.0);
+     }
+@@ -10673,6 +10766,7 @@ mod issue_4657_distribute_alignment_tests {
+             text_width,
+             avail,
+             40.0,
++            None,
+         );
+         assert_eq!(extra_word, 0.0);
+         assert_eq!(extra_dash, 0.0);
+diff --git a/src/renderer/layout/text_measurement.rs b/src/renderer/layout/text_measurement.rs
+index 59cf673f4163455011af96a91f3e464791ea5b7b..92bc986341ae31d3e06f574d61ae82364d58e7fb 100644
+--- a/src/renderer/layout/text_measurement.rs
++++ b/src/renderer/layout/text_measurement.rs
+@@ -865,6 +865,7 @@ pub(crate) fn resolved_to_text_style(
+             tab_leaders: Vec::new(),
+             inline_tabs: Vec::new(),
+             extra_word_spacing: 0.0,
++            hop_word_spacing_from: 0,
+             extra_char_spacing: 0.0,
+             extra_dash_advance: 0.0,
+             outline_type: cs.outline_type,
+@@ -1585,7 +1586,8 @@ pub(crate) fn char_width_decision<'a>(
+     let mut final_width_px = base_width_px * ratio
+         + glyph_letter_spacing(letter_spacing, base_width_px * ratio, font_size)
+         + style.extra_char_spacing;
+-    if c == ' ' {
++    // [HOP patch 0011] 탭이 든 양쪽 정렬 줄은 마지막 탭 뒤 공백만 여분을 받는다.
++    if c == ' ' && i >= style.hop_word_spacing_from {
+         final_width_px += style.extra_word_spacing;
+     }
+     if dash_leader {
+diff --git a/src/renderer/mod.rs b/src/renderer/mod.rs
+index 9f9251fb926242590746a7efb904adf3dc1f6fab..ded4374937c8787364ec23707c4c509e34c092d4 100644
+--- a/src/renderer/mod.rs
++++ b/src/renderer/mod.rs
+@@ -324,6 +324,10 @@ pub struct TextStyle {
+     pub inline_tabs: Vec<[u16; 7]>,
+     /// 양쪽 정렬용: 공백 문자당 추가 간격 (px)
+     pub extra_word_spacing: f64,
++    /// [HOP patch 0011] `extra_word_spacing`을 받는 공백의 시작 글자 위치(이 run 텍스트 기준, 0 = 모든 공백).
++    /// 한글 2024는 탭이 든 양쪽 정렬 줄에서 마지막 탭 뒤 공백에만 여분을 나눈다.
++    #[serde(skip_serializing)]
++    pub hop_word_spacing_from: usize,
+     /// 배분/나눔 정렬용: 글자당 추가 간격 (px)
+     pub extra_char_spacing: f64,
+     /// Task #352: dash leader (3+ 연속 '-') 시퀀스의 글자당 추가 간격 (px).
+@@ -593,6 +597,7 @@ impl Default for TextStyle {
+             tab_leaders: Vec::new(),
+             inline_tabs: Vec::new(),
+             extra_word_spacing: 0.0,
++            hop_word_spacing_from: 0,
+             extra_char_spacing: 0.0,
+             extra_dash_advance: 0.0,
+             outline_type: 0,

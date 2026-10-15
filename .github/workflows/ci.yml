@@ -18,13 +18,23 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   NODE_VERSION: "24"
+  # The desktop test graph (Tauri + the Achmage crates) outgrew the runner disk with full debug info.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   unit-tests:
     name: Unit tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
+      - name: Free runner disk
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Checkout
         uses: actions/checkout@v5
         with:
@@ -46,6 +56,7 @@ jobs:
             curl \
             file \
             libayatana-appindicator3-dev \
+            libdbus-1-dev \
             "$fuse_package" \
             libgtk-3-dev \
             librsvg2-dev \
@@ -100,8 +111,26 @@ jobs:
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
+      # The studio tests run the real Kordoc worker; the engine is its own package, outside the pnpm workspace.
+      # Without optional packages or install scripts: the same closure the desktop bundle ships.
+      - name: Install Kordoc engine dependencies
+        run: pnpm --dir apps/kordoc-engine install --frozen-lockfile --ignore-workspace --no-optional --ignore-scripts
+
+      - name: Test Kordoc engine
+        run: pnpm --dir apps/kordoc-engine test
+
       - name: Verify rhwp upstream contract
         run: pnpm upstream:verify
+
+      # vendor/rhwp-native is the pinned commit with patches/rhwp applied (docs/rhwp-patch-queue.md). Where it is
+      # committed it must equal a fresh export; where it is not, this step writes it for the native builds.
+      - name: Prepare patched rhwp native tree
+        run: |
+          if git ls-files --error-unmatch vendor/rhwp-native/HOP-EXPORT.json >/dev/null 2>&1; then
+            python3 scripts/achmage/sync-rhwp-native.py --check
+          else
+            python3 scripts/achmage/sync-rhwp-native.py
+          fi
 
       - name: Typecheck and build studio
         run: pnpm build:studio
@@ -111,3 +140,17 @@ jobs:
 
       - name: Lint desktop Rust
         run: pnpm clippy:desktop
+
+      # Achmage native crates (AI sessions, providers, research, runtime installer, Telegram)
+      # are path dependencies of the desktop app; their own tests run here on Linux.
+      - name: Test Achmage native crates
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: target/achmage-crates
+        run: |
+          set -euo pipefail
+          for manifest in apps/desktop/achmage-*/Cargo.toml; do
+            echo "::group::${manifest}"
+            cargo test --manifest-path "$manifest"
+            echo "::endgroup::"
+          done

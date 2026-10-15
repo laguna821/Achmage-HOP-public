@@ -1,0 +1,21 @@
+.achmage-telegram-dialog{margin:auto;inset:0;width:min(520px,calc(100vw - 40px));max-height:calc(100vh - 60px);overflow:auto;box-sizing:border-box;padding:24px;border:1px solid var(--ach-border);border-radius:16px;background:var(--ach-surface);color:var(--ach-text);font-family:inherit;font-size:13px;line-height:1.6;box-shadow:0 20px 70px color-mix(in srgb,var(--ach-shadow) 20%,transparent)}
+.achmage-telegram-dialog::backdrop{background:color-mix(in srgb,var(--ach-shadow) 40%,transparent)}
+.achmage-telegram-dialog h2{margin:0 0 12px;font-size:18px;color:var(--ach-heading)}
+.achmage-telegram-dialog h3{margin:16px 0 6px;font-size:14px;color:var(--ach-heading)}
+.achmage-telegram-dialog .tg-help{white-space:pre-wrap;color:var(--ach-muted,var(--ach-text))}
+.achmage-telegram-dialog .tg-status{font-weight:600}
+.achmage-telegram-dialog label{display:flex;gap:8px;align-items:center;margin:6px 0}
+.achmage-telegram-dialog .tg-token-label{flex-direction:column;align-items:stretch}
+.achmage-telegram-dialog input[type=password],.achmage-telegram-dialog .tg-code{min-height:34px;padding:4px 10px;border:1px solid var(--ach-border);border-radius:8px;background:var(--ach-surface);color:var(--ach-text);font:inherit}
+.achmage-telegram-dialog .tg-row{display:flex;gap:8px;align-items:center;margin-top:8px}
+.achmage-telegram-dialog .tg-code{flex:1}
+.achmage-telegram-dialog ul{margin:0;padding:0;list-style:none}
+.achmage-telegram-dialog li{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--ach-border)}
+.achmage-telegram-dialog li span{overflow-wrap:anywhere}
+.achmage-telegram-dialog .tg-error{color:var(--ach-danger,#c62828);min-height:1em}
+.achmage-telegram-dialog footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+.achmage-telegram-dialog button{appearance:none;min-height:36px;padding:6px 14px;border:1px solid var(--ach-border);border-radius:8px;background:var(--ach-surface);color:var(--ach-text);font:inherit;cursor:pointer}
+.achmage-telegram-dialog button[data-tg=save],.achmage-telegram-dialog button[data-tg=approve]{background:var(--ach-action);color:var(--ach-on-action,#fff);border-color:transparent}
+.achmage-telegram-dialog button:disabled,.achmage-telegram-dialog input:disabled{opacity:.5;cursor:default}
+.achmage-telegram-dialog button:focus-visible,.achmage-telegram-dialog input:focus-visible{outline:2px solid var(--ach-action);outline-offset:2px}
+.achmage-telegram-dialog [hidden]{display:none!important}

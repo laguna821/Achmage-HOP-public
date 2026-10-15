@@ -1,5 +1,8 @@
 name: HOP Desktop Release
 
+# Upstream HOP's signed release workflow, kept so upstream changes merge cleanly. Achmage HOP releases are
+# built by achmage-desktop.yml; this one needs upstream's signing secrets and is not used here.
+
 on:
   workflow_dispatch:
     inputs:
@@ -260,6 +263,7 @@ jobs:
             libssl-dev \
             libwebkit2gtk-4.1-dev \
             libxdo-dev \
+            libdbus-1-dev \
             pkg-config
 
       - name: Setup Node.js
@@ -370,7 +374,9 @@ jobs:
             libssl-dev \
             libwebkit2gtk-4.1-dev \
             libxdo-dev \
+            libdbus-1-dev \
             patchelf \
+            pkg-config \
             rpm \
             wget
 

@@ -111,6 +111,8 @@ impl UpdateManagerState {
 }
 
 pub fn install_startup_update_check(app: &AppHandle) {
+    // A local fork must never replace itself with the upstream distribution.
+    if app.config().identifier != "net.golbin.hop" { return; }
     #[cfg(debug_assertions)]
     {
         let _ = app;
@@ -153,6 +155,9 @@ pub fn get_update_state(app: AppHandle) -> Result<UpdateNoticeState, String> {
 
 #[tauri::command]
 pub fn start_update_install(app: AppHandle) -> Result<(), String> {
+    if app.config().identifier != "net.golbin.hop" {
+        return Err("이 개발 버전은 자체 배포 패키지로 업데이트합니다.".into());
+    }
     if has_dirty_documents(&app) {
         return Err(
             "저장되지 않은 변경사항이 있어 지금은 업데이트할 수 없습니다. 저장 후 다시 시도하세요."

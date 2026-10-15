@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hop-workbench <hop@localhost>
+Date: Thu, 15 Oct 2026 17:36:32 +0900
+Subject: [PATCH 12/12] hop-generator-version-xml
+
+
+diff --git a/src/serializer/hwpx/mod.rs b/src/serializer/hwpx/mod.rs
+index 1aa05f2b02ed3a7447a69e7e0aa2e8ce5a4096dd..e7364ebe6982e36ea6910afde34ce5b9323322a0 100644
+--- a/src/serializer/hwpx/mod.rs
++++ b/src/serializer/hwpx/mod.rs
+@@ -451,6 +451,14 @@ mod tests {
+         );
+     }
+ 
++    /// [HOP patch 0012] A document without its own version.xml names the program that wrote it, not Hancom
++    /// Office; the OWPML attributes that layout depends on (`xmlVersion` above) stay as they were.
++    #[test]
++    fn version_xml_names_the_writing_program() {
++        assert!(static_assets::VERSION_XML.contains(r#"application="Achmage HOP""#));
++        assert!(!static_assets::VERSION_XML.contains("Hancom"));
++    }
++
+     #[test]
+     fn serialize_with_one_section_parses_back() {
+         let mut doc = Document::default();
+diff --git a/src/serializer/hwpx/templates/version.xml b/src/serializer/hwpx/templates/version.xml
+index bc58db9986c9aa95dfac2d558782b34865d3f0da..d6a84fb5418a2d8ffdab50ca9df9650f690102ed 100644
+--- a/src/serializer/hwpx/templates/version.xml
++++ b/src/serializer/hwpx/templates/version.xml
+@@ -1 +1 @@
+-<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hv:HCFVersion xmlns:hv="http://www.hancom.co.kr/hwpml/2011/version" tagetApplication="WORDPROCESSOR" major="5" minor="1" micro="0" buildNumber="1" os="1" xmlVersion="1.5" application="Hancom Office Hangul" appVersion="11, 0, 0, 3524 WIN32LEWindows_8"/>
+\ No newline at end of file
++<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hv:HCFVersion xmlns:hv="http://www.hancom.co.kr/hwpml/2011/version" tagetApplication="WORDPROCESSOR" major="5" minor="1" micro="0" buildNumber="1" os="1" xmlVersion="1.5" application="Achmage HOP" appVersion="1"/>
+\ No newline at end of file

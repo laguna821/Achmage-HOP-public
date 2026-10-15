@@ -16,9 +16,14 @@ import {
 } from '@/upstream/editor';
 import { Toolbar } from '@/ui/toolbar';
 import { MODAL_DIALOG_CLOSED_EVENT } from '@/ui/dialog';
-import { CommandPalette, ContextMenu, MenuBar, initStyleToolbarOverflow } from '@/upstream/ui';
-import { loadWebFonts } from '@/core/font-loader';
+import { CommandPalette, MenuBar, initStyleToolbarOverflow } from '@/upstream/ui';
+import { AchmageContextMenu } from './achmage-ai/inline-context-menu';
+import { loadWebFonts, prepareFontStyles } from '@/core/font-loader';
 import { loadStoredLocalFonts } from '@/core/local-fonts';
+import { detectDesktopFontEntries } from './core/desktop-local-fonts';
+import { createDesktopHostFontProvider } from './core/desktop-host-font-provider';
+import { installCrispCanvases } from './core/crisp-canvas';
+import { upstreamLocalFonts } from '@/upstream/local-fonts';
 import { isSupportedDocumentPath } from '@/core/document-files';
 import { loadDocumentForOpen } from './core/document-open';
 import { initToolbarLabels } from './host/toolbar-labels';
@@ -29,6 +34,11 @@ import { HomeScreen } from '@/ui/home-screen';
 import type { DesktopBridgeApi } from '@/core/tauri-bridge';
 import { createCommandRuntime } from './host/command-runtime';
 import { createRendererSession } from './host/renderer-session';
+import { installAiPanel } from './achmage-ai/panel';
+import { installTelegramDocumentResponder } from './achmage-ai/telegram-document';
+import { installThemeToggle } from './host/theme-toggle';
+import './achmage-ai/panel.css';
+import './styles/achmage-theme.css';
 
 const wasm = createBridge();
 const eventBus = new EventBus();
@@ -75,26 +85,54 @@ const commandRuntime = createCommandRuntime({
   setStatusMessage: (message) => { sbMessage().textContent = message; },
 });
 const { dispatcher, registry, services: commandServices } = commandRuntime;
+installThemeToggle(id => dispatcher.dispatch(id));
 
 document.addEventListener(MODAL_DIALOG_CLOSED_EVENT, () => {
   if (inputHandler?.isActive()) inputHandler.focus();
 });
 
+/**
+ * The renderer draws and measures with the installed faces the document names (rhwp's host
+ * font provider; upstream main.ts wires it, HOP's own bootstrap must too). Without it every
+ * Canvas font started with Malgun Gothic and line breaks differed from Hancom.
+ */
+function installDesktopHostFonts(): void {
+  const provider = createDesktopHostFontProvider(() => detectDesktopFontEntries());
+  upstreamLocalFonts.onHostFontsChanged(() => {
+    if (!canvasView || wasm.pageCount === 0) return;
+    wasm.invalidateCanvasMetricFonts();
+    void canvasView.refreshFontResources().catch(error => {
+      console.warn('[HostFonts] View refresh failed:', error);
+    });
+  });
+  void upstreamLocalFonts.setHostFontProvider(provider).catch(error => {
+    console.warn('[HostFonts] Desktop font catalog unavailable; display substitutes stay in use:', error);
+  });
+}
+
 async function initialize(): Promise<void> {
+  performance.mark('hop:startup:begin');
   const msg = sbMessage();
   try {
     const tauriRuntime = isTauriRuntime();
     desktopPlatform = await hydrateDesktopPlatform();
     applyDesktopChromePlatformState(document, desktopPlatform);
-    msg.textContent = '웹폰트 로딩 중...';
-    await loadStoredLocalFonts().catch(() => null);
-    await loadWebFonts([]);  // CSS @font-face 등록 + CRITICAL 폰트만 로드
+    // Preserve browser font restoration; the desktop adapter only returns its
+    // cached metadata here. Native font bytes are awaited when opening a document.
+    prepareFontStyles();
     msg.textContent = '문서 엔진 로딩 중...';
-    await wasm.initialize();
+    await Promise.all([
+      loadStoredLocalFonts().catch(() => null),
+      wasm.initialize(),
+    ]);
+    performance.measure('hop:startup:engine-ready', 'hop:startup:begin');
     msg.textContent = 'HWP 파일을 선택해주세요.';
 
     const container = document.getElementById('scroll-container')!;
     canvasView = new CanvasView(container, wasm, eventBus, rendererSession);
+    if (tauriRuntime) installDesktopHostFonts();
+    // Page bitmaps stay 1:1 on device pixels so zoomed-out text is not resampled soft.
+    installCrispCanvases(document.getElementById('scroll-content')!);
     homeScreen = new HomeScreen(container, wasm, {
       openFile: () => {
         dispatcher.dispatch('file:open');
@@ -134,7 +172,7 @@ async function initialize(): Promise<void> {
 
     // InputHandler에 커맨드 디스패처 및 컨텍스트 메뉴 주입
     inputHandler.setDispatcher(dispatcher);
-    inputHandler.setContextMenu(new ContextMenu(dispatcher, registry));
+    inputHandler.setContextMenu(new AchmageContextMenu(dispatcher, registry));
     inputHandler.setCommandPalette(new CommandPalette(registry, dispatcher));
     inputHandler.setCellSelectionRenderer(
       new CellSelectionRenderer(container, canvasView.getVirtualScroll()),
@@ -194,6 +232,10 @@ async function initialize(): Promise<void> {
     setupFileInput();
     setupZoomControls();
     setupEventListeners();
+    installAiPanel({ wasm, input: inputHandler, eventBus, view: canvasView,
+      dirty: () => documentState.isDirty(), undo: () => { dispatcher.dispatch('edit:undo'); } });
+    // Lets the owner ask about this window's document from Telegram (read-only, this window only).
+    if (tauriRuntime) void installTelegramDocumentResponder(wasm).catch(() => undefined);
     setupGlobalShortcuts();
     const updateNotice = tauriRuntime
       ? new UpdateNotice(updateNoticeActions(wasm))
@@ -214,6 +256,7 @@ async function initialize(): Promise<void> {
       void homeScreen?.refresh(wasm.pageCount > 0);
     });
 
+    performance.measure('hop:startup:shell-ready', 'hop:startup:begin');
     // E2E 테스트용 전역 노출 (개발 모드 전용)
     if (import.meta.env.DEV) {
       (window as any).__inputHandler = inputHandler;
@@ -530,11 +573,10 @@ async function initializeDocument(
   const msg = sbMessage();
   try {
     canvasView?.prepareDocumentLoad();
-    if (docInfo.fontsUsed?.length) {
-      await loadWebFonts(docInfo.fontsUsed, (loaded, total) => {
-        msg.textContent = `폰트 로딩 중... (${loaded}/${total})`;
-      });
-    }
+    // Empty/new documents still need the default faces before the first layout.
+    await loadWebFonts(docInfo.fontsUsed ?? [], (loaded, total) => {
+      msg.textContent = `폰트 로딩 중... (${loaded}/${total})`;
+    });
     msg.textContent = displayName;
     totalSections = docInfo.sectionCount ?? 1;
     sbSection().textContent = `구역: 1 / ${totalSections}`;

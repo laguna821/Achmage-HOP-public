@@ -1,0 +1,399 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hop-workbench <hop@localhost>
+Date: Thu, 15 Oct 2026 17:36:30 +0900
+Subject: [PATCH 07/12] hop-widow-orphan-keep-next
+
+
+diff --git a/src/document_core/commands/document.rs b/src/document_core/commands/document.rs
+index cf2a293ee96d0e09cc1a677b501e630ff7998d02..8d14169c9b7e9b30c8827a98b7e01010fa603fe2 100644
+--- a/src/document_core/commands/document.rs
++++ b/src/document_core/commands/document.rs
+@@ -299,6 +299,7 @@ impl DocumentCore {
+             debug_overlay: false,
+             respect_vpos_reset: false,
+             hangul2024_compat: false,
++            hop_pagination_rules: true,
+             measured_tables: Vec::new(),
+             dirty_sections: vec![true; sec_count],
+             measured_sections: Vec::new(),
+diff --git a/src/document_core/mod.rs b/src/document_core/mod.rs
+index c7f2d2c5fded4e149929893ec724647c771a8221..6ecec076df166ba3f7b95d16ebc454a7a52671ab 100644
+--- a/src/document_core/mod.rs
++++ b/src/document_core/mod.rs
+@@ -222,6 +222,8 @@ pub struct DocumentCore {
+     /// 문서 출처가 아니므로 provenance 가 아닌 여기서 들고,
+     /// [`Self::effective_layout_profile`] 이 profile 에 합성한다.
+     pub(crate) hangul2024_compat: bool,
++    /// [HOP patch] Hancom 2024 widow/orphan and keep-with-next pagination (session setting, on by default).
++    pub(crate) hop_pagination_rules: bool,
+     /// 구역별 표 측정 데이터 (페이지네이션 결과 보존)
+     pub(crate) measured_tables: Vec<Vec<MeasuredTable>>,
+     /// 구역별 dirty 플래그 (true = 재페이지네이션 필요)
+@@ -460,6 +462,7 @@ impl DocumentCore {
+         self.document
+             .layout_profile()
+             .with_hangul2024_layout(self.hangul2024_compat)
++            .with_hop_pagination_rules(self.hop_pagination_rules)
+     }
+ 
+     /// Rebuild the resolved-style aggregate with the document format's style
+@@ -487,6 +490,18 @@ impl DocumentCore {
+         );
+     }
+ 
++    /// [HOP patch] Turns Hancom 2024's widow/orphan and keep-with-next pagination on or off and repaginates.
++    pub fn set_hop_pagination_rules(&mut self, enabled: bool) {
++        if self.hop_pagination_rules != enabled {
++            self.hop_pagination_rules = enabled;
++            for d in self.dirty_sections.iter_mut() {
++                *d = true;
++            }
++            self.invalidate_page_tree_cache();
++            self.paginate();
++        }
++    }
++
+     /// 한글 2024 계열 조판 에뮬레이션을 켜거나 끈다.
+     /// 변경 시 페이지네이션 결과가 달라지므로 모든 섹션을 재페이지네이션한다.
+     pub fn set_hangul2024_compat(&mut self, enabled: bool) {
+@@ -531,6 +546,7 @@ impl DocumentCore {
+             debug_overlay: false,
+             respect_vpos_reset: false,
+             hangul2024_compat: false,
++            hop_pagination_rules: true,
+             measured_tables: Vec::new(),
+             dirty_sections: Vec::new(),
+             measured_sections: Vec::new(),
+diff --git a/src/model/provenance.rs b/src/model/provenance.rs
+index 89c5d5b3572ca13d155bc0d265bebe77d9afac2d..84835a5bc7e4c5ebbc5389e96b4b6b0d232ed55a 100644
+--- a/src/model/provenance.rs
++++ b/src/model/provenance.rs
+@@ -59,6 +59,9 @@ pub struct LayoutCompatibilityProfile {
+     hwp5_origin_hwpx: bool,
+     native_hwp5_layout: bool,
+     hangul2024_layout: bool,
++    /// [HOP patch] Hancom 2024 widow/orphan and keep-with-next pagination for sections rhwp lays out itself
++    /// (session setting, on by default).
++    hop_pagination_rules: bool,
+     /// 이 세션에서 편집 명령이 문서를 변조했다(native HWP5 섹션의 raw_stream 소실).
+     /// 저장 시점 형상 전용 보정(선언 높이 fit-down 등)은 편집 문서에서 꺼야 한다 —
+     /// 한글 편집기도 편집 중에는 측정 기반으로 재조판한다.
+@@ -83,10 +86,22 @@ impl LayoutCompatibilityProfile {
+             hwp5_origin_hwpx,
+             native_hwp5_layout,
+             hangul2024_layout: false,
++            hop_pagination_rules: true,
+             session_edited: false,
+         }
+     }
+ 
++    /// [HOP patch] Whether freshly laid-out sections follow Hancom 2024's widow/orphan and keep-with-next rules.
++    pub fn hop_pagination_rules(&self) -> bool {
++        self.hop_pagination_rules
++    }
++
++    /// [HOP patch] Session setting for [`Self::hop_pagination_rules`].
++    pub(crate) fn with_hop_pagination_rules(mut self, enabled: bool) -> Self {
++        self.hop_pagination_rules = enabled;
++        self
++    }
++
+     /// 이 세션의 편집 변조를 표시한다. `Document::layout_profile` 만 이 값을
+     /// 유도한다(native HWP5 raw_stream 소실 신호).
+     pub(crate) fn with_session_edited(mut self, enabled: bool) -> Self {
+diff --git a/src/renderer/typeset/paragraph.rs b/src/renderer/typeset/paragraph.rs
+index 6735063513e7456c6264faea7f27b9420e44f809..ebf0cd0bfd525367ac136772fe4d44b80a4b2301 100644
+--- a/src/renderer/typeset/paragraph.rs
++++ b/src/renderer/typeset/paragraph.rs
+@@ -17,6 +17,7 @@ mod entry;
+ pub(super) mod fit;
+ pub(super) mod flow;
+ pub(super) mod format;
++pub(super) mod hop_rules;
+ pub(super) mod line_queries;
+ pub(super) mod metrics;
+ pub(super) mod overflow;
+@@ -59,6 +60,7 @@ pub(super) fn place_split_paragraph(
+     native_hwp5_existing_footnote_reset_line: Option<usize>,
+     current_page_vpos_base: Option<i32>,
+     is_tac_picture_stack: bool,
++    widow_orphan: bool,
+     dpi: f64,
+ ) {
+     // 줄 단위 분할 루프
+@@ -139,6 +141,25 @@ pub(super) fn place_split_paragraph(
+             },
+         );
+ 
++        // [HOP patch] Hancom 2024 widow/orphan control (hop_rules): the last line never goes on alone, and a first
++        // line alone at the page end moves the paragraph to the next page (never to a page it would start).
++        let (end_line, cumulative) = if widow_orphan {
++            let end = hop_rules::widow_end_line(cursor_line, end_line, line_count);
++            (end, if end == end_line { cumulative } else { fmt.line_advances_sum(cursor_line..end) })
++        } else {
++            (end_line, cumulative)
++        };
++        if widow_orphan
++            && on_entry_page
++            && !st.current_items.is_empty()
++            && !hop_rules::follows_continued_table(&st.current_items)
++            && hop_rules::orphan_moves_paragraph(cursor_line, end_line, line_count)
++        {
++            st.advance_column_or_new_page();
++            on_entry_page = false;
++            continue;
++        }
++
+         let Some(fragment) = placement::plan_fragment(
+             fmt,
+             para_idx,
+@@ -550,6 +571,11 @@ pub(super) fn place_after_failed_fit(
+         native_hwp5_existing_footnote_reset_line,
+         current_page_vpos_base,
+         is_tac_picture_stack,
++        hop_rules::apply(st, paragraphs)
++            && styles
++                .para_styles
++                .get(para.para_shape_id as usize)
++                .is_some_and(|style| style.widow_orphan),
+         dpi,
+     );
+ }
+@@ -609,7 +635,7 @@ pub(super) fn prepare_fit_budget(
+     }
+ 
+     let strict_after_empty_host_float = st.take_strict_paragraph_fit(para);
+-    let layout_drift_safety_px = fit::layout_drift_safety_px(paragraphs);
++    let layout_drift_safety_px = hop_rules::layout_drift_safety_px(st, paragraphs);
+     let prev_is_partial_table =
+         matches!(st.current_items.last(), Some(PageItem::PartialTable { .. }));
+     let safety = st.take_paragraph_safety_margin(
+diff --git a/src/renderer/typeset/paragraph/flow.rs b/src/renderer/typeset/paragraph/flow.rs
+index e8315480693c7e7af40f9379ac9241fbaa6abe19..b820b4c44171d383c763148f4cf0234a0560e7c3 100644
+--- a/src/renderer/typeset/paragraph/flow.rs
++++ b/src/renderer/typeset/paragraph/flow.rs
+@@ -104,6 +104,11 @@ pub(in crate::renderer::typeset) fn place(
+             native_hwp5_existing_footnote_reset_line,
+             current_page_vpos_base,
+             false,
++            paragraph::hop_rules::apply(st, paragraphs)
++                && styles
++                    .para_styles
++                    .get(para.para_shape_id as usize)
++                    .is_some_and(|style| style.widow_orphan),
+             dpi,
+         );
+         return;
+diff --git a/src/renderer/typeset/paragraph/hop_rules.rs b/src/renderer/typeset/paragraph/hop_rules.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..ef8956e2829d7c873390bc25b2b666246361a0ac
+--- /dev/null
++++ b/src/renderer/typeset/paragraph/hop_rules.rs
+@@ -0,0 +1,149 @@
++//! [HOP patch] Hancom 2024 widow/orphan and keep-with-next pagination.
++//!
++//! Observed in Hancom 2024 printouts of the author's own test documents, one setting at a time (a page holds 39
++//! lines): widowOrphan moves the last line's predecessor along (40 lines: 38+2, not 39+1) and moves a paragraph
++//! whose first line alone would end a page (38+6 lines: 38+6, not 39+5); keepWithNext moves a paragraph whose
++//! successor's first line would not follow it on the page (37/2/1 lines: 37+3, not 39+1).
++//!
++//! The rules apply only where rhwp lays the whole section out itself: stored line segments already carry
++//! Hancom's pagination, and a partly stored section would mix both. Multi-column flow is left alone.
++
++use super::metrics::FormattedParagraph;
++use crate::model::paragraph::Paragraph;
++use crate::renderer::style_resolver::ResolvedStyleSet;
++use crate::renderer::typeset::TypesetState;
++
++/// Longest keep-with-next chain followed (headings stacked on headings).
++const KEEP_WITH_NEXT_CHAIN_LIMIT: usize = 8;
++
++/// Whether the rules apply to this section at the current flow position.
++pub(in crate::renderer::typeset) fn apply(st: &TypesetState, paragraphs: &[Paragraph]) -> bool {
++    st.profile.hop_pagination_rules()
++        && st.col_count == 1
++        && paragraphs
++            .iter()
++            .all(crate::renderer::para_has_no_stored_line_segs)
++}
++
++/// The fit margin against typeset/layout drift (`fit::layout_drift_safety_px`). In a section rhwp lays out itself
++/// both read the same composed line heights, and the margin only cost lines Hancom 2024 fits: a mixed-size
++/// paragraph whose 39th line ends within 3 pt of the body bottom went to the next page (Hancom 2024 printout).
++pub(in crate::renderer::typeset) fn layout_drift_safety_px(st: &TypesetState, paragraphs: &[Paragraph]) -> f64 {
++    if apply(st, paragraphs) {
++        0.0
++    } else {
++        super::fit::layout_drift_safety_px(paragraphs)
++    }
++}
++
++/// Widow control for one page's fragment `cursor_line..end_line` of a paragraph that continues: when only its
++/// last line would go on, one more line goes with it.
++pub(in crate::renderer::typeset) fn widow_end_line(
++    cursor_line: usize,
++    end_line: usize,
++    line_count: usize,
++) -> usize {
++    if end_line < line_count && line_count - end_line == 1 && end_line - cursor_line >= 2 {
++        end_line - 1
++    } else {
++        end_line
++    }
++}
++
++/// Orphan control: the paragraph's first line alone would end this page.
++pub(in crate::renderer::typeset) fn orphan_moves_paragraph(
++    cursor_line: usize,
++    end_line: usize,
++    line_count: usize,
++) -> bool {
++    cursor_line == 0 && end_line == 1 && line_count > 1
++}
++
++/// The paragraph directly follows the last fragment of a table that continued from an earlier page. Hancom 2024
++/// skips the first-line check there: after an 80-row table a 2-line paragraph splits 1+1 and a 3-line one 1+2,
++/// while after a short table or plain text the same paragraphs move whole (Hancom 2024 printouts).
++pub(in crate::renderer::typeset) fn follows_continued_table(
++    current_items: &[crate::renderer::pagination::PageItem],
++) -> bool {
++    matches!(
++        current_items.last(),
++        Some(crate::renderer::pagination::PageItem::PartialTable {
++            is_continuation: true,
++            ..
++        })
++    )
++}
++
++/// Keep with next: this paragraph fits on the page, but the first line of the paragraph it keeps with (after any
++/// further keep-with-next paragraphs) does not, while the whole chain would fit on an empty page.
++/// `format_next` formats a following paragraph by index.
++pub(in crate::renderer::typeset) fn keep_with_next_moves_paragraph(
++    st: &TypesetState,
++    para_idx: usize,
++    fmt: &FormattedParagraph,
++    paragraphs: &[Paragraph],
++    styles: &ResolvedStyleSet,
++    available: f64,
++    page_body: f64,
++    mut format_next: impl FnMut(usize) -> FormattedParagraph,
++) -> bool {
++    let keeps = |idx: usize| {
++        paragraphs
++            .get(idx)
++            .and_then(|p| styles.para_styles.get(p.para_shape_id as usize))
++            .is_some_and(|style| style.keep_with_next)
++    };
++    if st.current_items.is_empty() || !keeps(para_idx) || fmt.total_height > available {
++        return false;
++    }
++    let mut need = fmt.total_height;
++    let mut idx = para_idx + 1;
++    loop {
++        let Some(next) = paragraphs.get(idx) else {
++            return false;
++        };
++        // Objects (tables, pictures) have their own placement rules; follow text paragraphs only.
++        if !next.controls.is_empty() {
++            return false;
++        }
++        let next_fmt = format_next(idx);
++        if keeps(idx) && idx - para_idx < KEEP_WITH_NEXT_CHAIN_LIMIT {
++            need += next_fmt.total_height;
++            idx += 1;
++            continue;
++        }
++        let Some(first_line) = next_fmt.line_heights.first() else {
++            return false;
++        };
++        need += next_fmt.spacing_before + first_line;
++        return need > available && need <= page_body;
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn widow_keeps_two_lines_together() {
++        // 40 lines, 39 fit: 38 + 2.
++        assert_eq!(widow_end_line(0, 39, 40), 38);
++        // 79 lines from line 39, 39 fit: 38 + 2.
++        assert_eq!(widow_end_line(39, 78, 79), 77);
++        // Two or more lines go on anyway.
++        assert_eq!(widow_end_line(0, 38, 40), 38);
++        // A fragment of one line cannot give one away.
++        assert_eq!(widow_end_line(5, 6, 7), 6);
++        // The last fragment is not a split.
++        assert_eq!(widow_end_line(0, 40, 40), 40);
++    }
++
++    #[test]
++    fn orphan_moves_a_first_line_alone() {
++        // 6-line paragraph with room for one line (after 38 lines).
++        assert!(orphan_moves_paragraph(0, 1, 6));
++        assert!(!orphan_moves_paragraph(0, 2, 6));
++        assert!(!orphan_moves_paragraph(3, 4, 6));
++        assert!(!orphan_moves_paragraph(0, 1, 1));
++    }
++}
+diff --git a/src/renderer/typeset/section/flow.rs b/src/renderer/typeset/section/flow.rs
+index 1d051e743db7e5a9c294ace2c27f8e7780c16ab0..28e17443dc65efc28f31aaa7827d872c1d473957 100644
+--- a/src/renderer/typeset/section/flow.rs
++++ b/src/renderer/typeset/section/flow.rs
+@@ -181,6 +181,35 @@ impl TypesetEngine {
+             ) {
+                 st.advance_column_or_new_page();
+             }
++            // [HOP patch] Hancom 2024 keep-with-next (paragraph::hop_rules), with the line budget the split loop
++            // uses: body left on the page, minus notes and the layout drift margin.
++            if crate::renderer::typeset::paragraph::hop_rules::apply(st, paragraphs) {
++                let drift = crate::renderer::typeset::paragraph::hop_rules::layout_drift_safety_px(st, paragraphs);
++                let fn_margin = if st.current_footnote_height > 0.0 {
++                    st.footnote_safety_margin
++                } else {
++                    0.0
++                };
++                let page_body = (st.base_available_height() - drift).max(0.0);
++                let available = (page_body
++                    - st.current_footnote_height
++                    - fn_margin
++                    - st.current_height
++                    - st.current_zone_y_offset)
++                    .max(0.0);
++                if crate::renderer::typeset::paragraph::hop_rules::keep_with_next_moves_paragraph(
++                    st,
++                    para_idx,
++                    &formatted,
++                    paragraphs,
++                    styles,
++                    available,
++                    page_body,
++                    |idx| self.format_paragraph(&paragraphs[idx], composed.get(idx), styles, Some(col_w)),
++                ) {
++                    st.advance_column_or_new_page();
++                }
++            }
+             // [Task #1027 Stage D] fit 직전 vpos 스냅으로 누적 drift 제거 (렌더러 정합).
+             self.vpos_snap_current_height(
+                 st,
+diff --git a/src/wasm_api.rs b/src/wasm_api.rs
+index 2031085e383b4fd0722ffb98bda2f678b9ce09e1..448112190b2730f3779562b36c96946817b07062 100644
+--- a/src/wasm_api.rs
++++ b/src/wasm_api.rs
+@@ -752,6 +752,13 @@ impl HwpDocument {
+         }
+     }
+ 
++    /// [HOP patch] Hancom 2024 widow/orphan and keep-with-next pagination for sections rhwp lays out itself
++    /// (on by default). Repaginates when it changes.
++    #[wasm_bindgen(js_name = setHopPaginationRules)]
++    pub fn set_hop_pagination_rules(&mut self, enabled: bool) {
++        self.core.set_hop_pagination_rules(enabled);
++    }
++
+     /// 총 페이지 수를 반환한다.
+     #[wasm_bindgen(js_name = pageCount)]
+     pub fn page_count(&self) -> u32 {

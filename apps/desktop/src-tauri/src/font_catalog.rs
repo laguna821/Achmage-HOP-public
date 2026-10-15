@@ -2,6 +2,8 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 use tauri::{AppHandle, Manager};
 use usvg::fontdb::{self, Source};
 
@@ -14,25 +16,18 @@ pub struct LocalFontEntry {
     pub weight: u16,
     pub source_kind: String,
     pub path: Option<String>,
+    /// Face number inside a TTC/OTC collection (0 for a single-face file).
+    pub face_index: u32,
 }
 
 pub fn desktop_extra_font_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(home_dir) = env_path("HOME") {
-            dirs.push(home_dir.join("Library/Fonts"));
-        }
-    }
-
+    // macOS ~/Library/Fonts and Linux ~/.local/share/fonts, ~/.fonts are user font folders the webview
+    // already sees (Core Text, fontconfig) and load_system_fonts already scans: they are system fonts
+    // (system_font_dirs), never re-read as file-backed bytes at startup.
     #[cfg(target_os = "linux")]
     {
-        if let Some(home_dir) = env_path("HOME") {
-            dirs.push(home_dir.join(".local/share/fonts"));
-            dirs.push(home_dir.join(".fonts"));
-        }
-
         let wsl_windows_fonts = PathBuf::from("/mnt/c/Windows/Fonts");
         if wsl_windows_fonts.is_dir() {
             dirs.push(wsl_windows_fonts);
@@ -58,8 +53,47 @@ pub fn pdf_font_dirs(app: &AppHandle) -> Vec<PathBuf> {
     dedupe_existing_dirs(dirs)
 }
 
-pub fn collect_desktop_local_font_entries() -> Vec<LocalFontEntry> {
-    collect_local_font_entries(&desktop_extra_font_dirs())
+/// The desktop catalog, shared by every window and rebuilt only when a font folder (or a folder directly
+/// inside one, such as an installed bundle) changes. A full scan parses every face and takes seconds
+/// with large CJK collections.
+pub fn cached_desktop_local_font_entries() -> Vec<LocalFontEntry> {
+    type Catalog = (Vec<(PathBuf, Option<SystemTime>)>, Vec<LocalFontEntry>);
+    static CACHE: Mutex<Option<Catalog>> = Mutex::new(None);
+    let dirs = desktop_extra_font_dirs();
+    let signature = font_dirs_signature(&dirs);
+    if let Ok(cache) = CACHE.lock() {
+        if let Some((cached, entries)) = cache.as_ref() {
+            if *cached == signature {
+                return entries.clone();
+            }
+        }
+    }
+    let entries = collect_local_font_entries(&dirs);
+    if let Ok(mut cache) = CACHE.lock() {
+        *cache = Some((signature, entries.clone()));
+    }
+    entries
+}
+
+fn font_dirs_signature(extra_font_dirs: &[PathBuf]) -> Vec<(PathBuf, Option<SystemTime>)> {
+    let modified = |path: &Path| fs::metadata(path).and_then(|m| m.modified()).ok();
+    let mut signature = Vec::new();
+    for root in extra_font_dirs.iter().cloned().chain(system_font_dirs()) {
+        signature.push((root.clone(), modified(&root)));
+        if let Ok(children) = fs::read_dir(&root) {
+            let mut nested: Vec<PathBuf> = children
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .collect();
+            nested.sort();
+            signature.extend(nested.into_iter().map(|path| {
+                let time = modified(&path);
+                (path, time)
+            }));
+        }
+    }
+    signature
 }
 
 pub fn read_desktop_local_font(path: &Path) -> Result<Vec<u8>, String> {
@@ -73,7 +107,10 @@ pub fn read_desktop_local_font(path: &Path) -> Result<Vec<u8>, String> {
         ));
     }
 
-    let allowed_roots = desktop_extra_font_dirs();
+    // The renderer reads the faces the open document names (installed or app-local),
+    // only inside font directories and only font files.
+    let mut allowed_roots = desktop_extra_font_dirs();
+    allowed_roots.extend(system_font_dirs());
     if !allowed_roots
         .iter()
         .any(|root| path_is_within_root(&path, root))
@@ -150,6 +187,7 @@ pub fn collect_local_font_entries(extra_font_dirs: &[PathBuf]) -> Vec<LocalFontE
                 weight: face.weight.0,
                 source_kind: source_kind.to_string(),
                 path: path.clone(),
+                face_index: face.index,
             });
         }
     }
@@ -196,6 +234,35 @@ fn style_name(style: fontdb::Style) -> &'static str {
     }
 }
 
+/// Operating-system font directories (read-only; fonts are never installed or changed).
+pub fn system_font_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(windows)]
+    {
+        if let Some(windir) = env_path("WINDIR").or_else(|| env_path("SystemRoot")) {
+            dirs.push(windir.join("Fonts"));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push(PathBuf::from("/Library/Fonts"));
+        dirs.push(PathBuf::from("/System/Library/Fonts"));
+        if let Some(home_dir) = env_path("HOME") {
+            dirs.push(home_dir.join("Library/Fonts"));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        dirs.push(PathBuf::from("/usr/share/fonts"));
+        dirs.push(PathBuf::from("/usr/local/share/fonts"));
+        if let Some(home_dir) = env_path("HOME") {
+            dirs.push(home_dir.join(".local/share/fonts"));
+            dirs.push(home_dir.join(".fonts"));
+        }
+    }
+    dedupe_existing_dirs(dirs)
+}
+
 fn env_path(name: &str) -> Option<PathBuf> {
     std::env::var_os(name).map(PathBuf::from)
 }
@@ -204,6 +271,7 @@ fn env_path(name: &str) -> Option<PathBuf> {
 fn windows_user_font_dirs(local_app_data: &Path) -> Vec<PathBuf> {
     vec![local_app_data.join("Microsoft/Windows/Fonts")]
 }
+
 
 fn dedupe_existing_dirs(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut seen = BTreeSet::new();
@@ -296,6 +364,7 @@ mod tests {
                         weight: face.weight.0,
                         source_kind: "system-installed".to_string(),
                         path: path.clone(),
+                        face_index: face.index,
                     });
                 }
             }
@@ -337,6 +406,7 @@ mod tests {
             )]
         );
     }
+
 
     #[test]
     fn path_is_within_root_rejects_escape_paths() {

@@ -16,6 +16,7 @@ import { editCommands } from '@/command/commands/edit';
 import { fileCommands } from '@/command/commands/file';
 import { assertUniqueCommandIds } from '../command/replace-upstream-commands';
 import { toolbarLabelsCommand } from './toolbar-labels';
+import { templateCommands } from './template-commands';
 
 interface CommandRuntimeDependencies {
   wasm: WasmBridge;
@@ -45,7 +46,7 @@ const commandContributions: readonly CommandDef[][] = [
   insertCommands,
   tableCommands,
   pageCommands,
-  toolCommands,
+  [...toolCommands, ...templateCommands],
 ];
 
 assertUniqueCommandIds(commandContributions);

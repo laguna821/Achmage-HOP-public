@@ -10270,6 +10270,14 @@ export class HwpDocument {
         }
     }
     /**
+     * [HOP patch] Hancom 2024 widow/orphan and keep-with-next pagination for sections rhwp lays out itself
+     * (on by default). Repaginates when it changes.
+     * @param {boolean} enabled
+     */
+    setHopPaginationRules(enabled) {
+        wasm.hwpdocument_setHopPaginationRules(this.__wbg_ptr, enabled);
+    }
+    /**
      * 각주/미주 내부 수식 컨트롤의 속성을 변경한다.
      * @param {string} kind
      * @param {number} section_idx

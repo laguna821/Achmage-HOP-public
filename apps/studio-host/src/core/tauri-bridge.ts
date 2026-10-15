@@ -2,7 +2,9 @@ import { WasmBridge } from '@/upstream/core';
 import type { DocumentInfo } from '@/upstream/core';
 import { remove, stat } from '@tauri-apps/plugin-fs';
 import { finiteFileSize, readFileInChunks, writeFileInChunks } from './chunked-fs';
+import type { ContentLossReport } from '@/upstream/core';
 import { loadDocumentForOpen } from './document-open';
+import { reopensAsSameDocument, type ReopenableDocument } from './save-verification';
 
 type DocumentFormat = 'hwp' | 'hwpx';
 
@@ -92,6 +94,12 @@ export interface DesktopBridgeApi {
   hasUnsavedChanges(): boolean;
   markDocumentDirty(): void;
   confirmWindowClose(): Promise<boolean>;
+}
+
+type SaveFormat = 'hwp' | 'hwpx';
+/** The format a path's extension names (any case), or null for neither. */
+function pathFormat(path: string): SaveFormat | null {
+  return /\.hwpx$/i.test(path) ? 'hwpx' : /\.hwp$/i.test(path) ? 'hwp' : null;
 }
 
 export class TauriBridge extends WasmBridge implements DesktopBridgeApi {
@@ -195,10 +203,12 @@ export class TauriBridge extends WasmBridge implements DesktopBridgeApi {
     if (!this.sourcePath) {
       return this.saveDocumentAs();
     }
-    if (this.sourceFormat === 'hwpx') {
-      throw new Error('HWPX 원본 저장은 아직 안전하게 지원하지 않습니다. 다른 이름으로 저장에서 HWP 파일로 저장하세요.');
-    }
-    return this.saveHwpThroughStaging(docId, null);
+    // An HWPX original is saved as HWPX, behind the loss report and a reopen check of the bytes.
+    const format: SaveFormat = this.sourceFormat === 'hwpx' ? 'hwpx' : 'hwp';
+    // A file whose extension does not match its contents is never rewritten in place: the bytes would not
+    // match the name. Save As lets the user pick a name for the format the document really has.
+    if (pathFormat(this.sourcePath) !== format) return this.saveDocumentAs();
+    return this.saveHwpThroughStaging(docId, null, format);
   }
 
   async saveDocumentAsFromCommand(): Promise<DesktopSaveResult | null> {
@@ -207,8 +217,19 @@ export class TauriBridge extends WasmBridge implements DesktopBridgeApi {
 
   private async saveDocumentAs(): Promise<DesktopSaveResult | null> {
     const docId = this.ensureDocumentLoaded();
-    const targetPath = await this.selectSavePath(this.suggestedHwpName(), 'HWP 문서', ['hwp']);
-    if (!targetPath) return null;
+    // HWP is offered first unless the document came from HWPX. A password-protected source is offered HWP only.
+    const preferred: SaveFormat = this.sourceFormat === 'hwpx' && !this.requiresPasswordForSave ? 'hwpx' : 'hwp';
+    const hwp = { name: 'HWP 문서', extensions: ['hwp'] }, hwpx = { name: 'HWPX 문서', extensions: ['hwpx'] };
+    const filters = this.requiresPasswordForSave ? [hwp] : preferred === 'hwpx' ? [hwpx, hwp] : [hwp, hwpx];
+    const chosen = await this.selectSavePathWithFilters(this.suggestedName(preferred), filters);
+    if (!chosen) return null;
+    // The path the dialog confirmed is never renamed to another extension: that would write to a file the
+    // user did not choose (and the dialog's overwrite warning never covered). Only a missing extension is added.
+    const chosenFormat = pathFormat(chosen);
+    if (this.requiresPasswordForSave && chosenFormat === 'hwpx') {
+      throw new Error('암호 문서는 암호 없는 HWP 파일로만 저장할 수 있습니다. 확장자를 .hwp로 정해 다시 저장하세요.');
+    }
+    const format: SaveFormat = chosenFormat ?? preferred;
     if (this.requiresPasswordForSave) {
       const { message } = await import('@tauri-apps/plugin-dialog');
       const choice = await message('저장한 HWP 파일에는 암호가 적용되지 않습니다. 암호 없이 저장하시겠습니까?', {
@@ -217,7 +238,7 @@ export class TauriBridge extends WasmBridge implements DesktopBridgeApi {
       });
       if (choice !== '암호 없이 저장' && choice !== 'Ok') return null;
     }
-    return this.saveHwpThroughStaging(docId, this.withExtension(targetPath, 'hwp'));
+    return this.saveHwpThroughStaging(docId, this.withExtension(chosen, format), format);
   }
 
   async exportPdfFromCommand(): Promise<string | null> {
@@ -233,7 +254,7 @@ export class TauriBridge extends WasmBridge implements DesktopBridgeApi {
       targetPath: finalPath,
     });
     try {
-      await this.writeCurrentHwpToPath(stagedPath);
+      if (!await this.writeCurrentHwpToPath(stagedPath, 'pdf')) return null;
       return await this.invoke<string>('export_pdf_from_hwp_path', {
         stagedPath,
         targetPath: finalPath,
@@ -368,6 +389,11 @@ export class TauriBridge extends WasmBridge implements DesktopBridgeApi {
     return this.docId;
   }
 
+  private async selectSavePathWithFilters(defaultPath: string, filters: { name: string; extensions: string[] }[]): Promise<string | null> {
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    return save({ defaultPath, filters });
+  }
+
   private async selectSavePath(
     defaultPath: string,
     filterName: string,
@@ -383,6 +409,7 @@ export class TauriBridge extends WasmBridge implements DesktopBridgeApi {
   private async saveHwpThroughStaging(
     docId: string,
     targetPath: string | null,
+    format: SaveFormat = 'hwp',
   ): Promise<DesktopSaveResult | null> {
     const finalPath = targetPath ?? this.sourcePath;
     if (!finalPath) throw new Error('새 문서는 저장 경로가 필요합니다');
@@ -392,7 +419,7 @@ export class TauriBridge extends WasmBridge implements DesktopBridgeApi {
 
     const stagedPath = await this.invoke<string>('prepare_staged_hwp_save', { targetPath: finalPath });
     try {
-      await this.writeCurrentHwpToPath(stagedPath);
+      if (!await this.writeCurrentHwpToPath(stagedPath, 'save', format)) return null;
       const result = await this.invoke<DesktopSaveResult>('commit_staged_hwp_save', {
         docId,
         stagedPath,
@@ -462,7 +489,7 @@ export class TauriBridge extends WasmBridge implements DesktopBridgeApi {
   }
 
   private async saveCurrentDocumentForSafety(): Promise<DesktopSaveResult | null> {
-    if (this.sourceFormat === 'hwpx' || this.requiresPasswordForSave) {
+    if (this.requiresPasswordForSave) {
       return this.saveDocumentAs();
     }
     return this.saveDocument();
@@ -499,8 +526,44 @@ export class TauriBridge extends WasmBridge implements DesktopBridgeApi {
     });
   }
 
-  private async writeCurrentHwpToPath(path: string): Promise<void> {
-    await writeFileInChunks(path, super.exportHwp());
+  /**
+   * The same serialization reports what it could not keep (emptied pictures, omitted objects,
+   * reduced field settings). The user decides before anything is written; cancelling writes nothing.
+   */
+  private async writeCurrentHwpToPath(path: string, purpose: 'save' | 'pdf', format: SaveFormat = 'hwp'): Promise<boolean> {
+    const artifact = format === 'hwpx' ? this.exportHwpxWithReport() : this.exportHwpWithReport();
+    // The reopen check comes first so the user is never asked to accept losses for a save that is then refused.
+    if (format === 'hwpx') this.verifyReopenedHwpx(artifact.bytes);
+    if (artifact.contentLoss.losses.length && !await this.confirmContentLoss(artifact.contentLoss, purpose)) return false;
+    await writeFileInChunks(path, artifact.bytes);
+    return true;
+  }
+
+  /**
+   * The HWPX writer is newer than the HWP one, so its bytes are opened again in a separate engine
+   * instance before anything is written: the same sections, paragraphs, text and objects must come back.
+   * Anything else stops the save and leaves the file on disk untouched.
+   */
+  private verifyReopenedHwpx(bytes: Uint8Array): void {
+    const current = this.borrowDocumentHandle() as unknown as ReopenableDocument | null;
+    if (!current) throw new Error('저장할 문서를 찾지 못했습니다.');
+    if (!reopensAsSameDocument(current, bytes)) throw new Error('HWPX로 저장할 내용을 다시 열어 확인해 보니 원본과 달라 저장하지 않았습니다. 다른 이름으로 저장에서 HWP로 저장하세요.');
+  }
+
+  private async confirmContentLoss(report: ContentLossReport, purpose: 'save' | 'pdf'): Promise<boolean> {
+    const { message } = await import('@tauri-apps/plugin-dialog');
+    const labels: Record<string, string> = { binaryContentEmptied: '그림·첨부 데이터가 비워짐', controlOmitted: '개체가 빠짐', metadataReduced: '필드 설정이 줄어듦' };
+    const lines = report.losses.slice(0, 5).map(loss => `• ${labels[loss.code] ?? loss.code}${loss.resourceId === undefined ? '' : ` #${loss.resourceId}`} (${loss.path})`);
+    if (report.losses.length > 5) lines.push(`• 그 밖에 ${report.losses.length - 5}건`);
+    const saveLabel = purpose === 'pdf' ? '그대로 내보내기' : '그대로 저장';
+    const lead = purpose === 'pdf'
+      ? 'PDF는 HWP로 바꾼 뒤 만들어지므로 다음 내용이 빠집니다.'
+      : `${report.outputFormat.toUpperCase()} 파일로 저장하면 다음 내용을 보존하지 못합니다.`;
+    const result = await message(
+      [lead, ...lines, '', purpose === 'pdf' ? '취소하면 PDF를 만들지 않습니다.' : '취소하면 아무것도 저장하지 않습니다.'].join('\n'),
+      { title: purpose === 'pdf' ? 'PDF 내보내기 손실 확인' : '저장 시 손실 확인', kind: 'warning', buttons: { ok: saveLabel, cancel: '취소' } },
+    );
+    return result === saveLabel || result === 'Ok';
   }
 
   private withExtension(path: string, extension: string): string {
@@ -576,9 +639,9 @@ export class TauriBridge extends WasmBridge implements DesktopBridgeApi {
     this.updateDocumentTitle();
   }
 
-  private suggestedHwpName(): string {
+  private suggestedName(format: SaveFormat): string {
     const name = this.fileName.replace(/\.(hwp|hwpx)$/i, '') || 'document';
-    return `${name}.hwp`;
+    return `${name}.${format}`;
   }
 
   private suggestedPdfName(): string {
@@ -588,6 +651,6 @@ export class TauriBridge extends WasmBridge implements DesktopBridgeApi {
 
   private updateDocumentTitle(): void {
     const name = this.docId ? this.fileName || '문서' : 'HOP';
-    document.title = `${this.dirty ? '• ' : ''}${name} - HOP`;
+    document.title = `${this.dirty ? '• ' : ''}${name} - Achmage HOP`;
   }
 }

@@ -118,6 +118,46 @@ describe('font loader', () => {
     expect(fontFaces.some((face) => face.name === 'HY헤드라인M')).toBe(true);
     expect((appended[0] as { textContent?: string }).textContent).toContain('HY헤드라인M');
   });
+
+  it('requests restricted file-backed bytes and suppresses aliases only after registration', async () => {
+    const { appended } = installFontEnvironment();
+    const policy = await import('./font-authoring-policy');
+    const ensure = vi.fn(async (families: string[]) => {
+      expect(families).toContain('HY헤드라인M');
+      policy.registerLoadedLocalAuthoringFamily('HY헤드라인M');
+      return new Set(['HY헤드라인M']);
+    });
+    vi.doMock('./local-fonts', () => ({
+      detectLocalFontEntries: vi.fn().mockResolvedValue([
+        { family: 'HY헤드라인M', sourceKind: 'file-backed' },
+      ]), ensureLocalFontsAvailable: ensure,
+    }));
+    const { loadWebFonts, getDetectedOSFonts } = await import('./font-loader');
+    await loadWebFonts(['HY헤드라인M']);
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(getDetectedOSFonts().has('HY헤드라인M')).toBe(true);
+    expect((appended[0] as { textContent?: string }).textContent).not.toContain('HY헤드라인M');
+  });
+
+  it('does not retain removed registered families in the loader availability cache', async () => {
+    const { appended } = installFontEnvironment();
+    const policy = await import('./font-authoring-policy');
+    const ensure = vi.fn()
+      .mockImplementationOnce(async () => {
+        policy.registerLoadedLocalAuthoringFamily('HY헤드라인M');
+        return new Set(['HY헤드라인M']);
+      }).mockResolvedValue(new Set());
+    vi.doMock('./local-fonts', () => ({
+      detectLocalFontEntries: vi.fn().mockResolvedValue([]),
+      ensureLocalFontsAvailable: ensure,
+    }));
+    const { loadWebFonts, getDetectedOSFonts } = await import('./font-loader');
+    await loadWebFonts(['HY헤드라인M']);
+    policy.clearLoadedLocalAuthoringFamilies();
+    await loadWebFonts(['HY헤드라인M']);
+    expect(getDetectedOSFonts().has('HY헤드라인M')).toBe(false);
+    expect((appended[0] as { textContent?: string }).textContent).toContain('HY헤드라인M');
+  });
 });
 
 function installFontEnvironment({

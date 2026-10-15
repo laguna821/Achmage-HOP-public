@@ -20,7 +20,31 @@ struct RecentDocumentStore {
 }
 
 pub fn list_documents(app: &AppHandle) -> Result<Vec<RecentDocument>, String> {
-    list_documents_at(&store_path(app)?)
+    let generated = generated_documents_dir(app);
+    Ok(list_documents_at(&store_path(app)?)?
+        .into_iter()
+        .filter(|document| !is_within(generated.as_deref(), Path::new(&document.path)))
+        .collect())
+}
+
+/// Documents the app generated (template documents, filled forms) are temporary files, not the user's
+/// documents; they never appear among recent documents.
+fn generated_documents_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_local_data_dir()
+        .ok()
+        .map(|dir| dir.join("generated-documents"))
+}
+
+fn is_within(dir: Option<&Path>, path: &Path) -> bool {
+    let Some(dir) = dir else { return false };
+    let (dir, path) = (normalized_document_path(dir), normalized_document_path(path));
+    let prefix = format!("{}{}", dir.trim_end_matches(['\\', '/']), std::path::MAIN_SEPARATOR);
+    if cfg!(windows) {
+        path.to_lowercase().starts_with(&prefix.to_lowercase())
+    } else {
+        path.starts_with(&prefix)
+    }
 }
 
 pub fn clear_documents(app: &AppHandle) -> Result<(), String> {
@@ -28,6 +52,9 @@ pub fn clear_documents(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn record_document(app: &AppHandle, path: &Path) -> Result<(), String> {
+    if is_within(generated_documents_dir(app).as_deref(), path) {
+        return Ok(());
+    }
     record_document_at(&store_path(app)?, path)?;
     Ok(())
 }
@@ -118,10 +145,24 @@ fn is_supported_document_path(path: &Path) -> bool {
 }
 
 fn normalized_document_path(path: &Path) -> String {
-    path.canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .to_string()
+    plain_path(
+        &path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy(),
+    )
+}
+
+/// Windows `canonicalize` returns verbatim paths (`\\?\C:\…`, `\\?\UNC\server\share`); people and the
+/// shell use the ordinary form.
+fn plain_path(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        path.to_string()
+    }
 }
 
 fn same_document_path(left: &str, right: &str) -> bool {
@@ -135,6 +176,29 @@ fn same_document_path(left: &str, right: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verbatim_windows_paths_are_shown_in_ordinary_form() {
+        assert_eq!(plain_path(r"\\?\C:\Users\me\보고서.hwp"), r"C:\Users\me\보고서.hwp");
+        assert_eq!(plain_path(r"\\?\UNC\server\share\a.hwpx"), r"\\server\share\a.hwpx");
+        assert_eq!(plain_path(r"C:\plain\a.hwp"), r"C:\plain\a.hwp");
+    }
+
+    #[test]
+    fn generated_documents_are_recognised_by_folder() {
+        let root = std::env::temp_dir().join(format!("hop-recent-generated-{}", std::process::id()));
+        let generated = root.join("generated-documents");
+        fs::create_dir_all(&generated).unwrap();
+        let inside = generated.join("8afc1cea437e451fa16e1714a0f80037.hwpx");
+        let outside = root.join("generated-documents-mine.hwpx");
+        fs::write(&inside, b"x").unwrap();
+        fs::write(&outside, b"x").unwrap();
+        assert!(is_within(Some(&generated), &inside));
+        assert!(!is_within(Some(&generated), &outside));
+        assert!(!is_within(None, &inside));
+        assert!(!normalized_document_path(&inside).starts_with(r"\\?\"));
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn record_document_keeps_most_recent_first_and_deduplicates() {

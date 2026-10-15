@@ -27,7 +27,7 @@ pub fn create_editor_window_with_label(app: &AppHandle, label: &str) -> Result<(
     let geometry = new_window_geometry(app);
 
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
-        .title("HOP")
+        .title("Achmage HOP")
         .inner_size(geometry.width, geometry.height)
         .min_inner_size(geometry.min_width, geometry.min_height)
         .prevent_overflow_with_margin(Size::Logical(LogicalSize::new(
@@ -49,6 +49,7 @@ pub fn create_editor_window_with_label(app: &AppHandle, label: &str) -> Result<(
     attach_document_drop_handler(app, &window);
     attach_pending_open_cleanup(app, &window);
     let _ = window.set_focus();
+    crate::achmage_telegram::window_opened(app);
 
     Ok(())
 }

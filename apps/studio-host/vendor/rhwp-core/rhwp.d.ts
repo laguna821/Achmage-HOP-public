@@ -2250,6 +2250,11 @@ export class HwpDocument {
      */
     setHeaderFooterPictureProperties(section_idx: number, outer_para_idx: number, outer_control_idx: number, inner_para_idx: number, inner_control_idx: number, props_json: string): string;
     /**
+     * [HOP patch] Hancom 2024 widow/orphan and keep-with-next pagination for sections rhwp lays out itself
+     * (on by default). Repaginates when it changes.
+     */
+    setHopPaginationRules(enabled: boolean): void;
+    /**
      * 각주/미주 내부 수식 컨트롤의 속성을 변경한다.
      */
     setNoteEquationProperties(kind: string, section_idx: number, parent_para_idx: number, note_control_idx: number, note_para_idx: number, inner_control_idx: number, props_json: string): string;
@@ -2976,6 +2981,7 @@ export interface InitOutput {
     readonly hwpdocument_setFormValueInCell: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
     readonly hwpdocument_setFormValueInCellEx: (a: number, b: number, c: number) => [number, number, number, number];
     readonly hwpdocument_setHeaderFooterPictureProperties: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly hwpdocument_setHopPaginationRules: (a: number, b: number) => void;
     readonly hwpdocument_setNoteEquationProperties: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly hwpdocument_setNoteEquationPropertiesEx: (a: number, b: number, c: number) => [number, number, number, number];
     readonly hwpdocument_setNumberingRestart: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];

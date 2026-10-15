@@ -140,6 +140,9 @@ impl DocumentSessionManager {
         path: PathBuf,
         source_fingerprint: Option<FileFingerprint>,
     ) -> Result<DocumentOpenResult, String> {
+        if let Some(name) = crate::kordoc::take_generated_name(&path) {
+            return self.open_generated_untitled(&path, &name);
+        }
         let format = DocumentFormat::from_path(&path)?;
 
         let doc_id = Uuid::new_v4().to_string();
@@ -160,6 +163,31 @@ impl DocumentSessionManager {
             page_svg_cache: HashMap::new(),
         };
         let result = session.open_result(file_name);
+        self.sessions.insert(doc_id.clone(), session);
+        self.active_doc_id = Some(doc_id);
+        Ok(result)
+    }
+
+    /// A document the app generated (template document, filled form): the bytes are read now and the
+    /// session has no source path, so it behaves as an untitled document named after its template.
+    /// Saving asks for a location; the temporary file is never overwritten or listed as recent.
+    pub fn open_generated_untitled(&mut self, path: &std::path::Path, name: &str) -> Result<DocumentOpenResult, String> {
+        let format = DocumentFormat::from_path(path)?;
+        let bytes = std::fs::read(path).map_err(|e| format!("생성 문서를 읽을 수 없습니다 ({e})"))?;
+        let core = editable_core_from_bytes(&bytes, "문서 파싱 실패", "편집 가능 문서 변환 실패")?;
+        let doc_id = Uuid::new_v4().to_string();
+        let session = DocumentSession {
+            doc_id: doc_id.clone(),
+            source_fingerprint: None,
+            source_path: None,
+            source_format: format,
+            dirty: false,
+            revision: 1,
+            page_count: core.page_count(),
+            core: Some(core),
+            page_svg_cache: HashMap::new(),
+        };
+        let result = session.open_result(format!("{name}.{}", if format == DocumentFormat::Hwpx { "hwpx" } else { "hwp" }));
         self.sessions.insert(doc_id.clone(), session);
         self.active_doc_id = Some(doc_id);
         Ok(result)
@@ -200,12 +228,6 @@ impl DocumentSessionManager {
             session.check_external_modification_for_path(&target_path)?;
         }
         let format = DocumentFormat::from_path(&target_path)?;
-        if format == DocumentFormat::Hwpx {
-            return Err(
-                "HWPX 경로에는 HWP 바이트를 저장할 수 없습니다. .hwp 파일로 저장하세요."
-                    .to_string(),
-            );
-        }
         let bytes = std::fs::read(&staged_path).map_err(|e| {
             format!(
                 "staging 파일을 읽을 수 없습니다: {} ({})",
@@ -213,9 +235,13 @@ impl DocumentSessionManager {
                 e
             )
         })?;
+        // The bytes must be the format the extension names (an HWP compound file or an HWPX zip).
+        if !bytes_match_format(&bytes, format) {
+            return Err("저장할 내용의 형식(HWP/HWPX)이 파일 확장자와 달라 저장하지 않았습니다.".to_string());
+        }
         let core =
             editable_core_from_bytes(&bytes, "저장 바이트 검증 실패", "저장 문서 변환 실패")?;
-        session.finish_hwp_save(target_path, &bytes, Some(core))?;
+        session.finish_hwp_save(target_path, &bytes, Some(core), format)?;
         let _ = std::fs::remove_file(&staged_path);
         Ok(session.save_result())
     }
@@ -569,6 +595,7 @@ impl DocumentSession {
         target_path: PathBuf,
         bytes: &[u8],
         core_override: Option<DocumentCore>,
+        format: DocumentFormat,
     ) -> Result<(), String> {
         atomic_write(&target_path, bytes)?;
         if let Some(core) = core_override {
@@ -576,7 +603,7 @@ impl DocumentSession {
             self.core = Some(core);
         }
         self.source_path = Some(target_path);
-        self.source_format = DocumentFormat::Hwp;
+        self.source_format = format;
         self.refresh_source_fingerprint_from_bytes(bytes)?;
         self.revision += 1;
         self.dirty = false;
@@ -698,6 +725,14 @@ fn fnv1a32_update(mut hash: u32, bytes: &[u8]) -> u32 {
     hash
 }
 
+/// HWP files are OLE compound files; HWPX files are zip packages.
+fn bytes_match_format(bytes: &[u8], format: DocumentFormat) -> bool {
+    match format {
+        DocumentFormat::Hwp => bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]),
+        DocumentFormat::Hwpx => bytes.starts_with(b"PK\x03\x04"),
+    }
+}
+
 fn same_path(left: &Path, right: &Path) -> bool {
     if left == right {
         return true;
@@ -774,6 +809,22 @@ mod tests {
         let mut manager = DocumentSessionManager::default();
         let result = manager.create_document().unwrap();
         assert!(!result.dirty);
+    }
+
+    #[test]
+    fn generated_document_opens_untitled_with_its_template_name_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("0123456789abcdef0123456789abcdef.hwpx");
+        std::fs::write(&path, include_bytes!("../../../studio-host/src/achmage-ai/fixtures/owned-blank.hwpx")).unwrap();
+        crate::kordoc::remember_generated_name(&path, "구매 신청서 (공용 초안)");
+        let mut manager = DocumentSessionManager::default();
+        let result = manager.open_document_tracking(path.clone(), None).unwrap();
+        assert_eq!(result.file_name, "구매 신청서 (공용 초안).hwpx");
+        assert!(result.source_path.is_none(), "a generated document is untitled; saving asks for a place");
+        assert!(result.page_count >= 1);
+        // The name is used once; opening the same temporary file again is an ordinary open.
+        let again = manager.open_document_tracking(path.clone(), None).unwrap();
+        assert_eq!(again.source_path.as_deref(), Some(path.to_string_lossy().as_ref()));
     }
 
     #[test]
@@ -1014,7 +1065,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_staged_hwp_save_rejects_hwpx_target_before_reading_staged_bytes() {
+    fn commit_staged_save_refuses_bytes_that_do_not_match_the_extension() {
         let mut manager = DocumentSessionManager::default();
         let opened = manager.create_document().unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -1027,14 +1078,44 @@ mod tests {
             .commit_staged_hwp_save(
                 &opened.doc_id,
                 staged_path.clone(),
-                target_path,
+                target_path.clone(),
                 Some(opened.revision),
                 false,
             )
             .unwrap_err();
 
-        assert!(error.contains("HWPX 경로에는 HWP 바이트를 저장할 수 없습니다"));
+        assert!(error.contains("파일 확장자와 달라"));
         assert!(staged_path.exists());
+        assert!(!target_path.exists());
+    }
+
+    #[test]
+    fn format_check_refuses_empty_and_truncated_bytes() {
+        for format in [DocumentFormat::Hwp, DocumentFormat::Hwpx] {
+            assert!(!bytes_match_format(b"", format));
+        }
+        assert!(!bytes_match_format(&[0xD0, 0xCF, 0x11], DocumentFormat::Hwp));
+        assert!(!bytes_match_format(b"PK\x03", DocumentFormat::Hwpx));
+        assert!(bytes_match_format(b"PK\x03\x04", DocumentFormat::Hwpx));
+    }
+
+    #[test]
+    fn commit_staged_save_writes_hwpx_bytes_to_an_hwpx_path_and_keeps_the_format() {
+        let mut manager = DocumentSessionManager::default();
+        let opened = manager.create_document().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let staged_path = dir.path().join("save.tmp");
+        let target_path = dir.path().join("saved.hwpx");
+        let hwpx = include_bytes!("../../../studio-host/src/achmage-ai/fixtures/owned-blank.hwpx");
+        std::fs::write(&staged_path, hwpx).unwrap();
+
+        let saved = manager
+            .commit_staged_hwp_save(&opened.doc_id, staged_path, target_path.clone(), Some(opened.revision), false)
+            .unwrap();
+
+        assert_eq!(std::fs::read(&target_path).unwrap(), hwpx.to_vec());
+        assert_eq!(saved.format, DocumentFormat::Hwpx);
+        assert_eq!(saved.source_path.as_deref(), Some(target_path.to_string_lossy().as_ref()));
     }
 
     #[test]

@@ -169,6 +169,14 @@
   width: 78px;
 }
 
+/* Inside the style-bar field grid a picker fills its own field and never grows past it, so narrow windows
+   (where the fixed widths above applied) no longer overlap the neighbouring pickers (T07). */
+#style-bar .sb-field-grid .sb-field > .custom-select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
 .dialog-wrap .custom-select {
   height: 22px;
   font-size: var(--font-size-sm);

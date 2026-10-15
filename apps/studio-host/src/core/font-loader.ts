@@ -23,6 +23,16 @@ export function getDetectedOSFonts(): ReadonlySet<string> {
   return detectedOSFonts;
 }
 
+/** Register lazy CSS sources without scanning or reading native document fonts. */
+export function prepareFontStyles(): void {
+  if (!fontFaceRegistered) {
+    registerFontFaces();
+    fontFaceRegistered = true;
+  } else {
+    syncRegisteredFontFaces();
+  }
+}
+
 export async function loadWebFonts(
   docFonts?: string[],
   onProgress?: (loaded: number, total: number) => void,
@@ -30,12 +40,7 @@ export async function loadWebFonts(
   const targetSet = new Set([...(docFonts ?? []), ...CRITICAL_FONTS]);
   await hydrateDetectedFonts(targetSet);
 
-  if (!fontFaceRegistered) {
-    registerFontFaces();
-    fontFaceRegistered = true;
-  } else {
-    syncRegisteredFontFaces();
-  }
+  prepareFontStyles();
 
   const targetFonts = FONT_LIST.filter((font) => {
     if (!targetSet.has(font.name)) return false;
@@ -69,6 +74,8 @@ export async function loadWebFonts(
 }
 
 async function hydrateDetectedFonts(targetFonts: Set<string>): Promise<void> {
+  // Rebuild availability: a forced catalog refresh can revoke loaded faces.
+  detectedOSFonts.clear();
   const localFontEntries = await detectLocalFontEntries().catch(() => []);
   for (const entry of localFontEntries) {
     if (entry.sourceKind !== 'system-installed') continue;
@@ -77,7 +84,7 @@ async function hydrateDetectedFonts(targetFonts: Set<string>): Promise<void> {
   }
 
   const availableFonts = await ensureLocalFontsAvailable(
-    Array.from(targetFonts).filter((family) => !isAuthoringBlockedFontFamily(family)),
+    Array.from(targetFonts),
   ).catch(() => new Set<string>());
   for (const family of availableFonts) {
     if (isAuthoringBlockedFontFamily(family)) continue;

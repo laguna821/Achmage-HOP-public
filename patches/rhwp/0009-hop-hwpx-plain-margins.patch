@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hop-workbench <hop@localhost>
+Date: Thu, 15 Oct 2026 17:36:31 +0900
+Subject: [PATCH 09/12] hop-hwpx-plain-margins
+
+
+diff --git a/src/parser/hwpx/mod.rs b/src/parser/hwpx/mod.rs
+index 704550771f223640021b45093d06984ba60444a5..e371b6ae70864e6a53b2cba15b85013bd1ad2798 100644
+--- a/src/parser/hwpx/mod.rs
++++ b/src/parser/hwpx/mod.rs
+@@ -457,11 +457,12 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
+     // 3. header.xml → DocInfo, DocProperties
+     let header_xml = reader.read_file("Contents/header.xml")?;
+     // 평문 여백의 단위 전환은 header.xml이 아닌 패키지 xmlVersion에 따른다.
+-    let physical_plain_margin = hwpx_aux_entries
+-        .iter()
+-        .find(|(path, _)| path == "version.xml")
+-        .and_then(|(_, bytes)| std::str::from_utf8(bytes).ok())
+-        .is_some_and(physical_para_margin_units_from_version);
++    let physical_plain_margin = plain_para_margin_units_physical(
++        hwpx_aux_entries
++            .iter()
++            .find(|(path, _)| path == "version.xml")
++            .map(|(_, bytes)| bytes.as_slice()),
++    );
+     let (mut doc_info, doc_properties) =
+         header::parse_hwpx_header_with_plain_margin_units(&header_xml, physical_plain_margin)?;
+     resolve_embedded_font_references(&mut doc_info, &package_info.bin_data_items);
+@@ -758,6 +759,17 @@ fn resolve_embedded_font_references(
+     }
+ }
+ 
++/// [HOP patch] Whether a package's plain (switch-less) paragraph margins are physical HWPUNIT. A package without
++/// version.xml (Kordoc-based and other generators) is: Hancom 2024 prints such a margin at its face value
++/// (in a Hancom 2024 printout: left 2000 → 20 pt, prev 1760 → 17.6 pt; rhwp drew 10 pt and 8.8 pt), and the HWPX
++/// serializer already writes a package without version.xml that way (`is_none_or` in serializer/hwpx/header.rs).
++pub(crate) fn plain_para_margin_units_physical(version_xml: Option<&[u8]>) -> bool {
++    match version_xml {
++        None => true,
++        Some(bytes) => std::str::from_utf8(bytes).is_ok_and(physical_para_margin_units_from_version),
++    }
++}
++
+ /// 패키지 판본이 문단 여백의 물리 단위를 사용하는지 판별한다.
+ /// 구버전 입력의 저장 단위와 직렬화의 역변환이 같은 판본 규칙을 소비한다.
+ pub(crate) fn physical_para_margin_units_from_version(xml: &str) -> bool {
+@@ -786,6 +798,13 @@ pub(crate) fn physical_para_margin_units_from_version(xml: &str) -> bool {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn hop_plain_margins_are_physical_without_version_xml() {
++        assert!(plain_para_margin_units_physical(None));
++        assert!(plain_para_margin_units_physical(Some(br#"<hv:HCFVersion xmlVersion="1.4"/>"#)));
++        assert!(!plain_para_margin_units_physical(Some(br#"<hv:HCFVersion xmlVersion="1.2"/>"#)));
++    }
++
+     #[test]
+     fn test_parse_hwpx_invalid_data() {
+         let result = parse_hwpx(&[0u8; 10]);

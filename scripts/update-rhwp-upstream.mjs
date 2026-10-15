@@ -36,6 +36,13 @@ if (!tag) {
 }
 
 assertStableTag(tag);
+// HOP builds rhwp with its own patch queue (patches/rhwp). This script would rebuild an unpatched WASM and leave
+// vendor/rhwp-native on the old commit, so an update follows docs/rhwp-patch-queue.md instead.
+const hopPatches = (await readdir(new URL('../patches/rhwp/', import.meta.url))).filter((name) => name.endsWith('.patch'));
+if (hopPatches.length > 0 && process.env.HOP_IGNORE_PATCH_QUEUE !== '1') {
+  console.error(`patches/rhwp holds ${hopPatches.length} HOP patches; follow docs/rhwp-patch-queue.md to move to ${tag}.`);
+  process.exit(2);
+}
 await assertSafeWorkingState();
 await verifyRhwpUpstream();
 

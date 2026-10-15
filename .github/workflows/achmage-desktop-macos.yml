@@ -1,0 +1,16 @@
+name: Achmage HOP Desktop (unsigned macOS arm64 only)
+
+# One-click macOS arm64 build (no inputs). macOS runners are billed at ten times the Linux rate on
+# private repositories, so this stays manual.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    uses: ./.github/workflows/achmage-desktop.yml
+    with:
+      macos_arm64: true
+      linux_x64: false

@@ -10,6 +10,7 @@ import {
   viewCommands,
 } from '@/upstream/commands';
 import { toolbarLabelsCommand } from '../host/toolbar-labels';
+import { templateCommands } from '../host/template-commands';
 import { editCommands } from './commands/edit';
 import { fileCommands } from './commands/file';
 import { assertUniqueCommandIds, replaceUpstreamCommands } from './replace-upstream-commands';
@@ -24,7 +25,7 @@ const productionCommandGroups = [
   insertCommands,
   tableCommands,
   pageCommands,
-  toolCommands,
+  [...toolCommands, ...templateCommands],
 ] as const;
 const productionCommandIds = new Set(productionCommandGroups.flat().map(({ id }) => id));
 

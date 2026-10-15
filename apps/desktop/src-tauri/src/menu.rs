@@ -2,8 +2,8 @@ use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::{App, Emitter};
 
 pub fn install(app: &mut App) -> tauri::Result<()> {
-    let app_about = MenuItemBuilder::with_id("file:about", "About HOP").build(app)?;
-    let app_quit = MenuItemBuilder::with_id("app:quit", "Quit HOP")
+    let app_about = MenuItemBuilder::with_id("file:about", "About Achmage HOP").build(app)?;
+    let app_quit = MenuItemBuilder::with_id("app:quit", "Quit Achmage HOP")
         .accelerator("CmdOrCtrl+Q")
         .build(app)?;
     let new_doc = MenuItemBuilder::with_id("file:new-doc", "New")
@@ -27,6 +27,11 @@ pub fn install(app: &mut App) -> tauri::Result<()> {
     let export_pdf = MenuItemBuilder::with_id("file:export-pdf", "Export PDF...")
         .accelerator("CmdOrCtrl+E")
         .build(app)?;
+    // Document templates (the AI panel's template window): add one from a Hangul file, or manage them.
+    let template_add =
+        MenuItemBuilder::with_id("tool:template-add", "Add Template from Hangul File...").build(app)?;
+    let template_manage =
+        MenuItemBuilder::with_id("tool:template-manage", "Document Templates...").build(app)?;
     let print = MenuItemBuilder::with_id("file:print", "Print...")
         .accelerator("CmdOrCtrl+P")
         .build(app)?;
@@ -65,7 +70,7 @@ pub fn install(app: &mut App) -> tauri::Result<()> {
     let fit_page = MenuItemBuilder::with_id("view:zoom-fit-page", "Fit Page").build(app)?;
     let fit_width = MenuItemBuilder::with_id("view:zoom-fit-width", "Fit Width").build(app)?;
 
-    let app_menu = SubmenuBuilder::new(app, "HOP")
+    let app_menu = SubmenuBuilder::new(app, "Achmage HOP")
         .item(&app_about)
         .separator()
         .services()
@@ -84,6 +89,9 @@ pub fn install(app: &mut App) -> tauri::Result<()> {
         .item(&open_recent)
         .item(&save)
         .item(&save_as)
+        .separator()
+        .item(&template_add)
+        .item(&template_manage)
         .separator()
         .item(&export_pdf)
         .item(&print)

@@ -1,0 +1,256 @@
+name: Achmage HOP Desktop (unsigned Windows / macOS / Linux)
+
+# Manual, or a release: pushing a tag achmage-v* builds all three platforms and publishes them as a
+# release of this repository (a tag with a hyphen, achmage-v1.1.0-rc.1, becomes a prerelease).
+# On a private repository macOS runners are billed at ten times the Linux rate; public ones build free.
+# Builds the Achmage configuration (AI panel, research, Kordoc engine runtime) without signing,
+# notarization, updater artifacts or any Hancom font (only the open fonts upstream HOP ships are bundled).
+on:
+  push:
+    tags:
+      - "achmage-v*"
+  workflow_dispatch:
+    inputs:
+      windows_x64:
+        description: Build Windows x64 (windows-2025, NSIS installer)
+        required: false
+        default: false
+        type: boolean
+      macos_arm64:
+        description: Build macOS arm64 (macos-15, billed at 10x; opt in)
+        required: false
+        default: false
+        type: boolean
+      linux_x64:
+        description: Build Linux x64 (ubuntu-22.04, .deb)
+        required: false
+        default: true
+        type: boolean
+  # achmage-desktop-macos.yml calls this with macOS only, so a macOS build needs no input toggling.
+  workflow_call:
+    inputs:
+      macos_arm64:
+        required: false
+        default: false
+        type: boolean
+      linux_x64:
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: achmage-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # The Kordoc runtime ships this exact Node binary; Windows builds use the same version.
+  NODE_VERSION: "24.19.0"
+
+jobs:
+  plan:
+    name: Plan builds
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      count: ${{ steps.matrix.outputs.count }}
+    steps:
+      - id: matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          matrix='{"include":[]}'
+          add() {
+            matrix="$(jq -c --arg name "$1" --arg os "$2" --arg target "$3" --arg bundles "$4" \
+              '.include += [{name:$name, os:$os, target:$target, bundles:$bundles}]' <<< "$matrix")"
+          }
+          release="${{ github.ref_type == 'tag' }}"
+          if [[ "$release" == "true" || "${{ inputs.windows_x64 }}" == "true" ]]; then
+            add windows-x64 windows-2025 x86_64-pc-windows-msvc nsis
+          fi
+          [[ "$release" == "true" || "${{ inputs.macos_arm64 }}" == "true" ]] && add macos-arm64 macos-15 aarch64-apple-darwin app,dmg
+          [[ "$release" == "true" || "${{ inputs.linux_x64 }}" == "true" ]] && add linux-x64 ubuntu-22.04 x86_64-unknown-linux-gnu deb
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "count=$(jq '.include | length' <<< "$matrix")" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Free runner disk
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Enable long paths on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --system core.longpaths true
+
+      - name: Checkout submodules
+        shell: bash
+        run: git submodule update --init --depth 1
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fuse_package="libfuse2"
+          if apt-cache show libfuse2t64 >/dev/null 2>&1; then fuse_package="libfuse2t64"; fi
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl file libayatana-appindicator3-dev libdbus-1-dev \
+            "$fuse_package" libgtk-3-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config wget
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Pin Rust and target to upstream contract
+        shell: bash
+        run: |
+          toolchain="$(node -p "require('./config/rhwp-upstream.json').rustToolchain")"
+          rustup toolchain install "$toolchain" --profile minimal --target "${{ matrix.target }}"
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: achmage-${{ matrix.name }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            achmage-${{ matrix.name }}-cargo-
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Without optional packages or install scripts: the closure the bundle ships is exactly what the engine needs.
+      - name: Install Kordoc engine dependencies
+        run: pnpm --dir apps/kordoc-engine install --frozen-lockfile --ignore-workspace --no-optional --ignore-scripts
+
+      - name: Test Kordoc engine
+        run: pnpm --dir apps/kordoc-engine test
+
+      - name: Package Kordoc runtime (this platform's Node + engine closure, executed once)
+        run: node scripts/achmage/prepare-kordoc-runtime.mjs
+
+      # PDF export builds rhwp natively from vendor/rhwp-native: the pinned rhwp commit with patches/rhwp applied.
+      # Write it when the repository does not carry it.
+      - name: Prepare patched rhwp native tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git ls-files --error-unmatch vendor/rhwp-native/HOP-EXPORT.json >/dev/null 2>&1; then
+            "$(command -v python3 || command -v python)" scripts/achmage/sync-rhwp-native.py
+          fi
+
+      - name: Third-party notices
+        env:
+          HOP_NOTICES_TARGET: ${{ matrix.target }}
+        run: node scripts/achmage/third-party-notices.mjs
+
+      - name: Build Tauri bundle
+        shell: bash
+        env:
+          HOP_MACOS_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cd apps/desktop
+          pnpm tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}" \
+            --config src-tauri/tauri.achmage.conf.json --config src-tauri/tauri.achmage.release.conf.json
+
+      - name: Collect bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/achmage-${{ matrix.name }}"
+          mkdir -p "$out"
+          bundle="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          find "$bundle" -maxdepth 2 -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' -o -name '*-setup.exe' \) -exec cp {} "$out/" \;
+          if [[ -d "$bundle/macos" ]]; then
+            (cd "$bundle/macos" && for app in *.app; do ditto -c -k --keepParent "$app" "$out/${app%.app}-${{ matrix.name }}.app.zip"; done)
+          fi
+          cp target/achmage/kordoc-packaging-latest.json "$out/kordoc-packaging.json"
+          cp apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.md "$out/THIRD_PARTY_NOTICES.md"
+          if command -v shasum >/dev/null; then sum="shasum -a 256"; else sum="sha256sum"; fi
+          (cd "$out" && $sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: achmage-hop-${{ matrix.name }}
+          path: ${{ runner.temp }}/achmage-${{ matrix.name }}
+          retention-days: 14
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download bundles
+        uses: actions/download-artifact@v5
+        with:
+          path: bundles
+      - name: Create release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          files=()
+          for dir in bundles/achmage-hop-*; do
+            name="${dir#bundles/achmage-hop-}"
+            mv "$dir/kordoc-packaging.json" "$dir/kordoc-packaging-$name.json"
+            mv "$dir/SHA256SUMS.txt" "$dir/SHA256SUMS-$name.txt"
+            mv "$dir/THIRD_PARTY_NOTICES.md" "$dir/THIRD_PARTY_NOTICES-$name.md"
+            for f in "$dir"/*; do files+=("$f"); done
+          done
+          version="${GITHUB_REF_NAME#achmage-v}"
+          title="Achmage HOP $version"
+          flags=()
+          if [[ "$version" == *-* ]]; then flags+=(--prerelease); title="$title (test build)"; fi
+          echo "Achmage HOP $version (서명 없음) — Windows x64 · macOS Apple Silicon · Linux x64." > notes.md
+          cat >> notes.md <<'NOTES'
+          Achmage HOP는 HOP와 rhwp를 바탕으로 한 비공식 배포판입니다. 한글과컴퓨터, HOP·rhwp 개발자와 관계가 없습니다.
+          설치본에는 한컴 글꼴이 들어 있지 않습니다. 함께 넣은 오픈소스 구성 요소의 라이선스는 `THIRD_PARTY_NOTICES-*.md`에 있습니다.
+
+          **설치**
+          - Windows: `…_x64-setup.exe` 실행(사용자 계정 설치, 관리자 권한 불필요). SmartScreen 경고가 뜨면 「추가 정보 → 실행」.
+          - macOS(M1 이후): `.dmg`를 열어 Applications로 끌어 놓기. 처음 실행이 막히면 「시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기」. 「손상됨」이라고 나오면 터미널에서 `xattr -dr com.apple.quarantine "/Applications/Achmage HOP.app"`.
+          - Linux: `.deb`(`sudo apt install ./파일.deb`). 다른 배포판은 저장소의 `scripts/achmage/build-local-installer.sh`로 직접 빌드할 수 있습니다.
+
+          **글꼴**: 앱은 운영체제에 설치된 글꼴을 씁니다. 문서가 지정한 글꼴이 없으면 비슷한 글꼴로 대신 그리므로 줄바꿈·쪽 나눔이 달라질 수 있습니다. 글꼴은 각 글꼴의 사용권 범위 안에서 설치해 쓰세요.
+
+          **알려진 한계**: 자동 업데이트가 없습니다(새 판은 Releases에서 받으세요). 변경 추적·한자 변환·매크로는 아직 지원하지 않습니다. 문제를 발견하면 문서 종류와 화면 캡처를 Issues에 알려 주세요.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" --repo "$GITHUB_REPOSITORY" "${flags[@]}" \
+            --title "$title" --notes-file notes.md

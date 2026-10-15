@@ -14,7 +14,6 @@ impl PendingOpenPaths {
         }
     }
 
-    #[cfg(any(test, not(target_os = "macos")))]
     pub fn queue_for_window(&self, window_label: &str, paths: impl IntoIterator<Item = String>) {
         let mut paths = paths.into_iter().peekable();
         if paths.peek().is_none() {

@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hop-workbench <hop@localhost>
+Date: Thu, 15 Oct 2026 17:36:29 +0900
+Subject: [PATCH 04/12] hop-text-layout-baseline
+
+
+diff --git a/src/document_core/queries/rendering.rs b/src/document_core/queries/rendering.rs
+index c435fd5fc2f5a407bd334d99858ebaf1b93ac280..8e758a1edab555fe85b4cba7279fe44fcac8a8af 100644
+--- a/src/document_core/queries/rendering.rs
++++ b/src/document_core/queries/rendering.rs
+@@ -3588,13 +3588,16 @@ impl DocumentCore {
+                     _ => String::new(),
+                 };
+ 
++                // [HOP patch] "baseline": the run's absolute baseline y (px), so line spacing can be compared with
++                // layouts that place lines by baseline (Hancom 2024 PDFs) rather than by box top.
+                 runs.push(format!(
+-                    "{{\"text\":\"{}\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1},\"charX\":[{}]{}{}{}{}{}}}",
++                    "{{\"text\":\"{}\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1},\"baseline\":{:.2},\"charX\":[{}]{}{}{}{}{}}}",
+                     escaped_text,
+                     node.bbox.x,
+                     node.bbox.y,
+                     node.bbox.width,
+                     node.bbox.height,
++                    node.bbox.y + text_run.baseline,
+                     char_x.join(","),
+                     font_info,
+                     format_info,

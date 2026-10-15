@@ -1,0 +1,10 @@
+
+# rhwp patch queue: applied to LF sources byte for byte, so never convert line endings.
+patches/rhwp/*.patch -text
+
+# Patched rhwp library for native builds (scripts/achmage/sync-rhwp-native.py): byte-identical to the export.
+vendor/rhwp-native/** -text
+
+# Vendored rhwp WASM and its glue: PROVENANCE.json records their sha256, so never convert line endings.
+apps/studio-host/vendor/rhwp-core/** -text
+

@@ -1,125 +1,64 @@
-name: Bug Report
-description: Report a bug in HOP
+name: 버그 신고
+description: Achmage HOP에서 생긴 문제를 알려 주세요
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Before filing a HOP bug, please test the same document and steps in the upstream rhwp demo:
+        Achmage HOP는 HOP와 rhwp를 바탕으로 한 비공식 배포판입니다. 이 앱에서 생긴 문제는 여기에 먼저 알려 주세요.
+        이 앱에만 있는 패치 때문일 수 있으므로, 원본 HOP·rhwp 저장소에는 그쪽 원본에서도 같은 문제가 확인될 때만 올려 주세요.
 
-        https://edwardkim.github.io/rhwp/
-
-        If the same problem also happens in rhwp, please report it to rhwp instead:
-
-        https://github.com/edwardkim/rhwp/issues
-
-  - type: checkboxes
-    id: rhwp-check
-    attributes:
-      label: Upstream rhwp check
-      description: HOP issues should be filed after checking whether the same problem reproduces in upstream rhwp.
-      options:
-        - label: I tested the same document and steps in the upstream rhwp demo.
-          required: true
-    validations:
-      required: true
-
-  - type: dropdown
-    id: rhwp-result
-    attributes:
-      label: rhwp demo result
-      options:
-        - The problem does not happen in rhwp.
-        - The same problem happens in rhwp, and I opened or found an upstream rhwp issue.
-    validations:
-      required: true
+        개인정보가 들어 있거나 공개할 수 없는 문서는 올리지 마세요.
 
   - type: input
-    id: rhwp-issue
+    id: version
     attributes:
-      label: rhwp issue link
-      description: If the same problem happens in rhwp, link the upstream rhwp issue here.
-      placeholder: "https://github.com/edwardkim/rhwp/issues/..."
+      label: 버전
+      description: 앱 정보 창에 보이는 버전 (예 1.0.0)
     validations:
-      required: false
+      required: true
 
   - type: dropdown
     id: os
     attributes:
-      label: Operating System
+      label: 운영체제
       options:
-        - macOS (Apple Silicon)
-        - macOS (Intel)
         - Windows
-        - Linux (Ubuntu/Debian)
-        - Linux (Fedora/RHEL)
-        - Linux (Arch/Manjaro)
-        - Linux (other)
+        - macOS
+        - Linux
     validations:
       required: true
 
   - type: input
     id: os-version
     attributes:
-      label: OS Version
-      placeholder: "e.g. macOS 15.4, Windows 11 24H2, Ubuntu 24.04"
-    validations:
-      required: true
-
-  - type: dropdown
-    id: package
-    attributes:
-      label: Install Package
-      options:
-        - DMG (macOS)
-        - Homebrew (macOS)
-        - MSI (Windows)
-        - AppImage (Linux)
-        - DEB (Linux)
-        - RPM (Linux)
-    validations:
-      required: true
-
-  - type: input
-    id: hop-version
-    attributes:
-      label: HOP Version
-      placeholder: "e.g. 0.1.8"
-    validations:
-      required: true
+      label: 운영체제 버전
+      placeholder: "예: Windows 11 24H2, macOS 15.4, Ubuntu 24.04"
 
   - type: textarea
-    id: description
+    id: problem
     attributes:
-      label: What happened?
-      description: Describe the bug clearly. Include screenshots if possible.
+      label: 무엇이 잘못됐나요
     validations:
       required: true
 
   - type: textarea
     id: steps
     attributes:
-      label: Steps to reproduce
-      description: Step-by-step instructions to reproduce the issue.
+      label: 다시 일으키는 순서
       value: |
         1.
         2.
         3.
-    validations:
-      required: true
 
   - type: textarea
     id: expected
     attributes:
-      label: Expected behavior
-    validations:
-      required: true
+      label: 기대한 결과
+      description: 예를 들어 같은 문서를 한글에서 열었을 때의 모습
 
   - type: textarea
-    id: extra
+    id: attachments
     attributes:
-      label: Additional context
-      description: |
-        Terminal error output, HWP sample file, IME name (for input issues), display setup (for rendering issues), etc.
-    validations:
-      required: false
+      label: 문서 종류와 화면 캡처
+      description: 공개해도 되는 문서와 캡처만 올려 주세요. 입력 문제라면 입력기 이름도 적어 주세요.

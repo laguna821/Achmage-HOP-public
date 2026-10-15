@@ -166,8 +166,16 @@ fn note_platform_recent_document(_app: &AppHandle, _path: &Path) -> Result<(), S
     Ok(())
 }
 
+/// Home-screen thumbnails parse and render a whole document; that runs off the main thread so a few
+/// recent files never freeze the window right after it opens.
 #[tauri::command]
-pub fn render_document_preview(path: String) -> Result<String, String> {
+pub async fn render_document_preview(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || render_document_preview_blocking(path))
+        .await
+        .map_err(|_| "문서 미리보기를 만들지 못했습니다.".to_string())?
+}
+
+fn render_document_preview_blocking(path: String) -> Result<String, String> {
     let path = PathBuf::from(path);
     ensure_document_open_path(&path)?;
     let bytes = std::fs::read(&path).map_err(|e| {
@@ -320,6 +328,7 @@ pub fn destroy_current_window(window: WebviewWindow) -> Result<(), String> {
 
 #[tauri::command]
 pub fn cancel_app_quit(app: AppHandle) -> Result<(), String> {
+    crate::achmage_telegram::cancel_quit(&app);
     crate::app_quit::cancel_app_quit_request(&app)
 }
 
@@ -336,14 +345,23 @@ pub fn desktop_platform() -> &'static str {
     }
 }
 
+// Font scans and reads run off the main thread (a sync command would freeze the window), and font
+// bytes travel as a binary response instead of a JSON number array (3-4x larger and slow to parse).
 #[tauri::command]
-pub fn list_local_fonts() -> Result<Vec<LocalFontEntry>, String> {
-    Ok(crate::font_catalog::collect_desktop_local_font_entries())
+pub async fn list_local_fonts() -> Result<Vec<LocalFontEntry>, String> {
+    tauri::async_runtime::spawn_blocking(crate::font_catalog::cached_desktop_local_font_entries)
+        .await
+        .map_err(|_| "로컬 폰트 목록을 읽지 못했습니다.".to_string())
 }
 
 #[tauri::command]
-pub fn read_local_font(path: String) -> Result<Vec<u8>, String> {
-    crate::font_catalog::read_desktop_local_font(Path::new(&path))
+pub async fn read_local_font(path: String) -> Result<tauri::ipc::Response, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        crate::font_catalog::read_desktop_local_font(Path::new(&path))
+    })
+    .await
+    .map_err(|_| "로컬 폰트 파일을 읽지 못했습니다.".to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 fn allow_frontend_fs_file(app: &AppHandle, path: &Path) -> Result<(), String> {
@@ -374,14 +392,11 @@ fn ensure_document_open_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// A save target is an .hwp or .hwpx path in an existing folder; the bytes are checked against the
+/// extension when the staged file is committed.
 fn ensure_hwp_target_path(path: &Path) -> Result<(), String> {
     ensure_target_parent(path, "저장 경로")?;
-    let format = DocumentFormat::from_path(path)?;
-    if format == DocumentFormat::Hwpx {
-        return Err(
-            "HWPX 경로에는 HWP 바이트를 저장할 수 없습니다. .hwp 파일로 저장하세요.".to_string(),
-        );
-    }
+    DocumentFormat::from_path(path)?;
     Ok(())
 }
 
@@ -527,12 +542,13 @@ mod tests {
     }
 
     #[test]
-    fn ensure_hwp_target_path_rejects_invalid_parent_and_hwpx() {
+    fn ensure_hwp_target_path_rejects_invalid_parent_and_unknown_extension() {
         let dir = tempfile::tempdir().unwrap();
         let missing_parent = dir.path().join("missing").join("saved.hwp");
 
         assert!(ensure_hwp_target_path(&missing_parent).is_err());
-        assert!(ensure_hwp_target_path(&dir.path().join("saved.hwpx")).is_err());
+        assert!(ensure_hwp_target_path(&dir.path().join("saved.hwpx")).is_ok());
+        assert!(ensure_hwp_target_path(&dir.path().join("saved.txt")).is_err());
     }
 
     #[test]

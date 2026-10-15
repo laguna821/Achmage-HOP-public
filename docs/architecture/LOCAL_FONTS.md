@@ -20,8 +20,8 @@ HOP는 `third_party/rhwp`를 수정하지 않고, 데스크톱 셸과 studio hos
 
 기본 system font directory는 `fontdb.load_system_fonts()`에 맡긴다. 추가 스캔은 HOP가 소유하는 bounded roots만 허용한다.
 
-- macOS: `~/Library/Fonts`
-- Linux: `~/.local/share/fonts`, `~/.fonts`, 필요 시 `/mnt/c/Windows/Fonts`
+- macOS: `~/Library/Fonts` (Achmage HOP는 시스템 글꼴로 다룸)
+- Linux: `~/.local/share/fonts`, `~/.fonts` (Achmage HOP는 시스템 글꼴로 다룸), 필요 시 `/mnt/c/Windows/Fonts`
 - Windows per-user: `%LOCALAPPDATA%/Microsoft/Windows/Fonts`
 
 `%ProgramFiles%/Hnc/Office*/HOffice*/Shared/TTF` 같은 Windows Hancom vendor root는 의도적으로 스캔하지 않는다. proprietary Hancom/Human 폰트명을 참조하는 문서는 HOP substitute 폰트로 렌더링하지만, 해당 로컬 vendor 폰트 바이너리를 authoring 폰트로 노출하지 않는다.
@@ -33,6 +33,11 @@ HOP는 `third_party/rhwp`를 수정하지 않고, 데스크톱 셸과 studio hos
 - proprietary font file path나 bytes를 telemetry, logs, release artifacts에 남기지 않는다.
 - proprietary Hancom/Human family name은 authoring 폰트 목록에서 제외하고, 새 글자 서식 적용이나 HTML 붙여넣기 시 HOP-safe substitute family로 정규화한다.
 - HOP repo에는 오픈 라이선스 substitute 폰트만 유지한다.
+
+## Achmage HOP에서 달라진 점
+
+- 위 추가 스캔 루트의 file-backed 글꼴은 편집기가 실제로 불러온 뒤에는 Hancom/Human 계열 이름이어도 새 글자 서식에 쓸 수 있다. 시스템 글꼴 폴더(Windows `C:\Windows\Fonts` 등)에서만 보이는 해당 계열은 원본 HOP처럼 authoring 목록에서 제외된다. 글꼴의 사용 범위는 사용자가 가진 사용권을 따른다.
+- 한컴오피스 프로그램 폴더(`%ProgramFiles%/Hnc/...`)는 읽지 않는다.
 
 ## Editor / PDF 일관성
 

@@ -1,0 +1,30 @@
+/* CMDS Achmage hallym-light/cmds-dark semantic palette, ported from its MIT
+   styles.css at 0184e6d0a3a8d84d676d91c29aa1e26a8de0a277, lines 3451–3563 (license: src/achmage-ai/LICENSE-CMDS).
+   Uses HOP's existing theme preference; document ink/paper are not recolored. */
+:root:root:root {
+  --ach-canvas:#f7f9fc; --ach-surface:#fff; --ach-surface-raised:#f0f5fa;
+  --ach-border:#d7e1ec; --ach-text:#00102e; --ach-muted:#526174;
+  --ach-heading:#002e6e; --ach-action:#0066b3; --ach-on-action:#fff;
+  --ach-motion:#00b5ad; --ach-danger:#a52834; --ach-shadow:#002e6e;
+  --ach-brand-ink:#053573; --ach-brand-teal:#03b5ad;
+  --ach-selected:color-mix(in srgb,var(--ach-action) 22%,var(--ach-surface));
+  --ui-bg:var(--ach-canvas); --ui-bg-light:var(--ach-surface-raised);
+  --ui-surface:var(--ach-surface); --ui-surface-raised:var(--ach-surface-raised); --ui-surface-muted:var(--ach-canvas);
+  --ui-border:var(--ach-border); --ui-border-light:var(--ach-border); --ui-border-subtle:var(--ach-border); --ui-border-strong:color-mix(in srgb,var(--ach-border) 70%,var(--ach-muted));
+  --ui-text:var(--ach-text); --ui-text-secondary:var(--ach-muted); --ui-text-muted:var(--ach-muted); --ui-text-hint:var(--ach-muted); --ui-text-placeholder:var(--ach-muted); --ui-text-disabled:color-mix(in srgb,var(--ach-muted) 60%,var(--ach-surface));
+  --ui-text-on-accent:var(--ach-on-action); --ui-hover:color-mix(in srgb,var(--ach-action) 9%,var(--ach-surface)); --ui-hover-strong:var(--ach-selected); --ui-active:var(--ach-selected); --ui-selected:var(--ach-selected);
+  --ui-menu-open:var(--ach-action); --ui-menu-open-border:var(--ach-action); --ui-toolbar-bg-start:var(--ach-surface); --ui-toolbar-bg-end:var(--ach-surface-raised);
+  --ui-accent-bg:var(--ach-selected); --ui-accent-bg-light:var(--ach-canvas); --ui-note-bg:var(--ach-surface-raised); --ui-note-border:var(--ach-border); --ui-note-text:var(--ach-text); --ui-link:var(--ach-action); --ui-danger:var(--ach-danger);
+  --focus-ring:var(--ach-action); --ui-focus-soft:color-mix(in srgb,var(--ach-action) 20%,transparent);
+  --accent-primary:var(--ach-action); --accent-strong:var(--ach-heading); --accent-light:var(--ach-action); --accent-hover:var(--ach-selected); --accent-subtle:var(--ach-muted);
+  --ruler-bg:var(--ach-surface-raised); --ruler-tick:var(--ach-muted); --ruler-text:var(--ach-text); --ruler-marker:var(--ach-action); --doc-workspace:var(--ach-canvas);
+}
+:root:root:root[data-theme-effective=dark] {
+  --ach-canvas:#0a0a0a; --ach-surface:#141414; --ach-surface-raised:#1f1f1f;
+  --ach-border:#333; --ach-text:#d4d4d4; --ach-muted:#888;
+  --ach-heading:#e985a2; --ach-action:#e985a2; --ach-on-action:#0a0a0a; --ach-danger:#ff6675; --ach-shadow:#000;
+  --ach-brand-ink:#e1e9f7; --ach-brand-teal:#03b5ad;
+  --ach-selected:color-mix(in srgb,var(--ach-action) 22%,var(--ach-canvas));
+}
+
+.achmage-theme-icon {display:grid;place-items:center;width:24px;height:24px;color:var(--ach-action);flex-shrink:0;}

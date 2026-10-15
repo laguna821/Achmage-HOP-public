@@ -176,7 +176,7 @@ export function packTemplate(pack: TemplatePack): DocumentTemplate {
     schemaVersion: 1, id: packTemplateId(pack), name: packName(pack, status), category: 'education', provenance: 'sample',
     description: `${fixed ? '빈 양식 채우기' : pack.strategy === 'minutes' ? '회의록 생성' : '보고서 생성'} · ${notes}`.slice(0, 1000),
     roles: pack.roles ? structuredClone(pack.roles) : rolesForLook(pack.strategy),
-    layout: pack.layout ? structuredClone(pack.layout) : { enginePreset: pack.strategy === 'minutes' ? 'minutes' : 'report', cover: false, toc: false, paper: 'A4', orientation: 'portrait', sampleMarkdown: (readableSkeleton(pack) || `# ${pack.name}`).slice(0, 32_000) },
+    layout: pack.layout ? structuredClone(pack.layout) : { enginePreset: pack.strategy === 'minutes' ? 'minutes' : 'report', cover: false, toc: false, paper: 'A4', orientation: 'portrait', sampleMarkdown: (readableSkeleton(pack) || `# ${pack.name}`).slice(0, 200_000) },
     ...(pack.look ? { look: structuredClone(pack.look) } : pack.layout ? {} : { look: pack.strategy === 'minutes' ? structuredClone(HALLYM_ILSONG_LOOK) : standardLook('report') }),
   };
 }

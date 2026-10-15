@@ -93,11 +93,12 @@ pub(crate) const TOO_LONG: &str = "문서가 너무 길어 만들지 않았습�
 pub(crate) const NO_TEMPLATES: &str = "이 설치본에 문서 서식 목록이 없어 문서를 만들 수 없습니다.";
 pub(crate) const DOCUMENT_CLOSED: &str = "그 번호의 문서 창이 닫혔습니다. /docs 로 목록을 다시 확인해 주세요.";
 
-/// Largest prompt the provider sessions accept is 64 KiB; documents are cut to stay below this.
-const PROMPT_LIMIT: usize = 60_000;
+/// The provider sessions set no prompt limit of their own; this keeps one remote question (an open document of about
+/// 256 KiB, `READ_LIMIT`) well inside a model's context. A longer document is cut and the answer says so.
+const PROMPT_LIMIT: usize = 320_000;
 
-/// Largest Markdown the document engine accepts, in bytes.
-const MARKDOWN_LIMIT: usize = 96_000;
+/// Largest Markdown the document engine accepts, in bytes (its input limit).
+const MARKDOWN_LIMIT: usize = 16 * 1024 * 1024;
 
 /// Timing of remote turns. Tests shrink these.
 #[derive(Debug, Clone, Copy)]
@@ -1470,7 +1471,8 @@ mod tests {
         assert_eq!(document_markdown("  # 제목  ").unwrap(), "# 제목");
         assert_eq!(document_markdown("```\n").unwrap_err(), NOT_MARKDOWN);
         assert_eq!(document_markdown("").unwrap_err(), EMPTY_ANSWER);
-        assert_eq!(document_markdown(&"가".repeat(40_000)).unwrap_err(), TOO_LONG);
+        assert_eq!(document_markdown(&"가".repeat(6_000_000)).unwrap_err(), TOO_LONG);
+        assert!(document_markdown(&"가".repeat(40_000)).is_ok(), "a 120 KB document is not too long");
         assert_eq!(heading("서문\n#  2026 계획 \n## 1장"), Some("2026 계획"));
     }
 
@@ -1526,8 +1528,8 @@ mod tests {
     async fn long_documents_are_cut_to_fit_one_prompt() {
         let mut fake = Fake::plain(&["claude"], &["claude"], Answer::Fixed("요약"));
         *lock(&fake.documents) = vec![document("main", "긴 문서", true)];
-        // Quotes and line breaks double in JSON, so 40,000 of them do not fit as they are.
-        let text = "가\"\n".repeat(20_000);
+        // Quotes and line breaks double in JSON, so 240,000 of them do not fit as they are.
+        let text = "가\"\n".repeat(120_000);
         fake.texts.insert("main".into(), DocumentText { title: "긴 문서".into(), text, truncated: false });
         let fake = Arc::new(fake);
         let router = Router::new(fake.clone(), fast());

@@ -8,7 +8,8 @@ import type {WasmBridge} from '@/upstream/core';
 type Wasm = Pick<WasmBridge, 'pageCount' | 'getSectionCount' | 'getParagraphCount' | 'getParagraphLength' | 'getTextRange' | 'getControls'> & Partial<Pick<WasmBridge, 'getTableDimensions' | 'getCellInfo' | 'getCellParagraphCount' | 'getCellParagraphLength' | 'getTextInCell'>>;
 export interface RemoteDocumentText { title: string; text: string; truncated: boolean }
 export const READ_EVENT = 'achmage-telegram-read-document';
-export const REMOTE_TEXT_BUDGET = 48 * 1024;
+/** About 85,000 Korean characters: a long report reads whole; the native side accepts the same (`READ_LIMIT`). */
+export const REMOTE_TEXT_BUDGET = 256 * 1024;
 const attempt = <T>(read: () => T, fallback: T): T => { try { return read(); } catch { return fallback; } };
 
 function tableRows(wasm: Wasm, section: number, paragraph: number, controlIndex: number): string[] {

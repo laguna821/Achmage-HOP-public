@@ -119,7 +119,18 @@ fn parse_response(bytes: &[u8], input: &Value) -> Result<Value, &'static str> {
         return Err("response_mismatch");
     }
     if v["ok"] == false {
-        // Worker/library exception strings may contain document content or paths.
+        // Worker/library exception strings may contain document content or paths. Only the engine's own
+        // rule sentences (fixed Korean text such as "표지를 만들려면 문서 맨 앞에 제목이 필요합니다.") are shown as they are.
+        if v["error"]["code"] == "engine_rule" {
+            if let Some(reason) = v["error"]["message"]
+                .as_str()
+                .filter(|m| m.chars().count() <= 200 && !m.contains(['/', '\\', '<', '\n']))
+            {
+                return Ok(
+                    json!({"id":input["id"],"ok":false,"error":{"code":"engine_rule","message":reason}}),
+                );
+            }
+        }
         let code = match v["error"]["code"].as_str() {
             Some("input_limit") => "input_limit",
             Some("response_limit") => "response_limit",
@@ -358,6 +369,19 @@ mod tests {
         )
         .unwrap();
         assert!(!e.to_string().contains("SECRET"));
+        // The engine's own rule sentence is shown; anything quoting content or a path is not.
+        let rule = parse_response(
+            "{\"id\":\"x\",\"ok\":false,\"error\":{\"code\":\"engine_rule\",\"message\":\"표지를 만들려면 문서 맨 앞에 제목이 필요합니다.\"}}\n".as_bytes(),
+            &q,
+        )
+        .unwrap();
+        assert_eq!(rule["error"]["message"], "표지를 만들려면 문서 맨 앞에 제목이 필요합니다.");
+        let quoted = parse_response(
+            b"{\"id\":\"x\",\"ok\":false,\"error\":{\"code\":\"engine_rule\",\"message\":\"docs/PRIVATE_PATH.hwpx\"}}\n",
+            &q,
+        )
+        .unwrap();
+        assert!(!quoted.to_string().contains("PRIVATE_PATH"));
         assert!(parse_response(b"{}\n{}\n", &q).is_err());
         assert!(parse_response(b"{\"id\":\"y\"}\n", &q).is_err());
         assert!(parse_response(b"\xff\n", &q).is_err());

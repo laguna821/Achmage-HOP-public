@@ -58,6 +58,7 @@ fn mcp_explicit_settings_and_credential_origin() {
         .is_err());
     let settings = |endpoint: &str| SourceSettings {
         options: [("endpoint".into(), endpoint.into())].into(),
+        ..Default::default()
     };
     assert!(service
         .configure("kosis", settings("http://127.0.0.1:1234/mcp"))
@@ -111,7 +112,8 @@ fn settings_and_secret_separation() {
         .configure(
             "crossref",
             SourceSettings {
-                options: [("api-key".into(), "secret".into())].into()
+                options: [("api-key".into(), "secret".into())].into(),
+                ..Default::default()
             }
         )
         .is_err());
@@ -160,6 +162,7 @@ fn oauth_action_state_contract_and_settings_atomic_replace() {
                 "wos",
                 SourceSettings {
                     options: [("editions".into(), edition.into())].into(),
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -171,9 +174,19 @@ fn oauth_action_state_contract_and_settings_atomic_replace() {
 #[tokio::test]
 async fn cancellation_stale_job() {
     let service = ResearchService::with_store(Arc::new(MemorySecrets::default())).unwrap();
+    // A turned-on connection to a closed local port: the job starts, nothing leaves the computer.
+    service
+        .configure(
+            "kosis",
+            SourceSettings {
+                options: [("endpoint".into(), "http://127.0.0.1:9/mcp".into())].into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     let id = service
         .start(SearchRequest {
-            source_id: "korean-law".into(),
+            source_id: "kosis".into(),
             query: "test".into(),
             limit: 1,
             cursor: None,

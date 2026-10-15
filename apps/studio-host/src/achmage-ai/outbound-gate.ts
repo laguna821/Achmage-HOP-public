@@ -10,6 +10,8 @@ export interface MaskedText { text: string; tokens: Map<string, string>; kinds: 
 const TOKEN = (n: number) => `〔개인정보${n}〕`;
 /** Models sometimes rewrite the brackets ([개인정보1]); those are still our tokens. */
 const TOKEN_PATTERN = /[〔\[]개인정보(\d+)[〕\]]/gu;
+/** A masking token still in text that is about to be applied (it was never restored). */
+export const hasPersonalToken = (text: string): boolean => new RegExp(TOKEN_PATTERN.source, 'u').test(text);
 
 const digits = (s: string) => s.replace(/\D/g, '');
 function rrnValid(value: string): boolean {

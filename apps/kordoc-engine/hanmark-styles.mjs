@@ -773,7 +773,7 @@ const escapeXml = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
  */
 export function insertContentsPage(sectionXml, headerXml, chapters, { afterCover, marker = 'roman' }) {
  const styles = new HeaderStyles(headerXml), ps = topLevelParagraphs(sectionXml);
- if (!chapters.length) fail('목차에는 소제목이 필요합니다.');
+ if (!chapters.length) fail('목차를 만들려면 장 제목이 필요합니다.');
  const plain = ps.map(p => sectionXml.slice(p.start, p.end)).find(xml => {
   const open = /^<hp:p\b[^>]*>/.exec(xml)?.[0] ?? '';
   return /\bstyleIDRef="0"/.test(open) && !/<hp:(?:tbl|pic|ctrl)\b/.test(xml) && !MARKER_START.test(xml) && paragraphText(xml).trim().length > 1;

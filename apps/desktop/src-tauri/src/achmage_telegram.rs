@@ -463,7 +463,7 @@ type ReadAnswer = oneshot::Sender<Result<DocumentText, String>>;
 const READ_EVENT: &str = "achmage-telegram-read-document";
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 /// Largest document text a window may send: its own budget (`REMOTE_TEXT_BUDGET`).
-const READ_LIMIT: usize = 48 * 1024;
+const READ_LIMIT: usize = 256 * 1024;
 
 /// Removes a read request when its wait ends in any way.
 struct PendingRead<'a> {

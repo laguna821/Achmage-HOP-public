@@ -19,7 +19,7 @@ export interface RestyleResult { paragraphs: number; summary: string; kept: Rest
 
 /** Controls that only set up the page or numbering: reformatting their paragraph moves nothing. */
 const LAYOUT = new Set(['secd', 'cold', 'pgnp', 'nwno', 'pghd', 'head', 'foot']);
-const MAX_TARGETS = 6000;
+const MAX_TARGETS = 50_000;
 const SAMPLES = 24;
 type CharProps = ReturnType<WasmBridge['getCharPropertiesAt']>;
 type Run = { startOffset: number; endOffset: number; charShapeId: number };

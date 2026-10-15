@@ -92,20 +92,34 @@ export function looksLikeDraft(nodes: readonly OutlineNode[]): boolean {
   return nodes.some(n => n.kind === 'table' || n.kind === 'heading') || items >= 2 || labels >= 2;
 }
 
-/** Kordoc Markdown: # title, ## chapters, ### sections, nested lists, real tables. */
-export function outlineToMarkdown(nodes: readonly OutlineNode[]): string {
-  const out: string[] = [];
+/**
+ * Text read from a document, not written as Markdown: every character Kordoc would act on is escaped, so
+ * "2024. 10. 15." stays a date, "a|b" stays in one table cell and "*", "~~" or "[…](…)" stay as typed.
+ * Measured on Kordoc 4.21.31: it removes these backslashes but keeps one before "&", and reads "&amp;" as
+ * text, so "&" is left alone.
+ */
+export function literalMarkdown(text: string): string {
+  return text.replace(/[\\`*_[\]<>~|]/g, '\\$&').replace(/^(\d+)([.)])/, '$1\\$2').replace(/^([#>+-])/, '\\$1');
+}
+
+/** Each node as one Kordoc Markdown block (# title, ## chapters, ### sections, nested lists, real tables). */
+export function outlineBlocks(nodes: readonly OutlineNode[], options: { literal?: boolean } = {}): string[] {
+  const t = options.literal ? literalMarkdown : (text: string) => text;
   const titleUsed = nodes.filter(n => n.kind === 'heading' && n.level === 1).length === 1;
-  for (const n of nodes) {
-    if (n.kind === 'heading') out.push(`${'#'.repeat(titleUsed ? n.level : n.level + 1)} ${n.text}`);
-    else if (n.kind === 'item') out.push(`${'  '.repeat(n.level - 1)}- ${n.text}`);
-    else if (n.kind === 'label') out.push(`- ${n.label}: ${n.text}`);
-    else if (n.kind === 'note') out.push(`※ ${n.text}`);
-    else if (n.kind === 'paragraph') out.push(n.text);
-    else { const [head, ...body] = n.rows; out.push(`| ${head.join(' | ')} |`, `|${head.map(() => ' --- ').join('|')}|`, ...body.map(r => `| ${r.join(' | ')} |`)); }
-    out.push('');
-  }
-  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+  return nodes.map(n => {
+    if (n.kind === 'heading') return `${'#'.repeat(titleUsed ? n.level : n.level + 1)} ${t(n.text)}`;
+    if (n.kind === 'item') return `${'  '.repeat(n.level - 1)}- ${t(n.text)}`;
+    if (n.kind === 'label') return `- ${t(n.label)}: ${t(n.text)}`;
+    if (n.kind === 'note') return `※ ${t(n.text)}`;
+    if (n.kind === 'paragraph') return t(n.text);
+    const [head, ...body] = n.rows, row = (r: string[]) => `| ${r.map(t).join(' | ')} |`;
+    return [row(head), `|${head.map(() => ' --- ').join('|')}|`, ...body.map(row)].join('\n');
+  });
+}
+
+/** Kordoc Markdown: # title, ## chapters, ### sections, nested lists, real tables. */
+export function outlineToMarkdown(nodes: readonly OutlineNode[], options: { literal?: boolean } = {}): string {
+  return outlineBlocks(nodes, options).join('\n\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
 }
 
 export interface OutlineStyles { title: StyleSpec; heading: StyleSpec; body: StyleSpec; tableHeader: StyleSpec; tableCell: StyleSpec }

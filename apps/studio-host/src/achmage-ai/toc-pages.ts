@@ -45,7 +45,7 @@ export function hasContentsHeading(wasm: WasmBridge, scan = 120): boolean {
 export function findToc(wasm: WasmBridge): TocEntry[] {
   if (wasm.pageCount === 0 || wasm.getSectionCount() !== 1) return [];
   const count = wasm.getParagraphCount(0);
-  if (count > 4000) return [];
+  if (count > 20_000) return [];
   const controls = wasm.getControls() as Control[], texts: string[] = [], headings = new Map<string, number[]>();
   const note = (key: string, p: number) => { if (key && Array.from(key).length <= 80) headings.set(key, [...(headings.get(key) ?? []), p]); };
   for (let p = 0; p < count; p++) {

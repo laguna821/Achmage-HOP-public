@@ -16,6 +16,8 @@ pub(crate) fn run(
     input: Option<&[u8]>,
     cancel: &AtomicBool,
     timeout: Duration,
+    // A turn that streams is never cut short; one that sends nothing for this long is.
+    idle: Option<Duration>,
     mut output: impl FnMut(&[u8]) -> Result<()>,
 ) -> Result<i32> {
     let mut command = Command::new(&cfg.executable);
@@ -88,6 +90,7 @@ pub(crate) fn run(
     });
     // Login keeps stdin open until the child exits; print mode writer closes it after one frame.
     let start = Instant::now();
+    let mut last = start;
     let mut total = 0usize;
     let mut eof = false;
     let mut status = None;
@@ -98,8 +101,12 @@ pub(crate) fn run(
         if start.elapsed() > timeout {
             break Err("timeout");
         }
+        if idle.is_some_and(|idle| last.elapsed() > idle) {
+            break Err("idle_timeout");
+        }
         match rx.recv_timeout(Duration::from_millis(10)) {
             Ok(Ok(bytes)) => {
+                last = Instant::now();
                 total += bytes.len();
                 // Partial-message deltas each carry a JSON envelope, so total output is many times the text.
                 if total > 256 * 1024 * 1024 {

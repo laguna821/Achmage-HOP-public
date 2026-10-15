@@ -18,6 +18,8 @@ export function templateLayout(template:DocumentTemplate):TemplateLayout {
 }
 export const TEMPLATE_ROLES:TemplateRole[]=['title','heading','body','tableHeader','tableCell'];
 export const TEMPLATE_ROLE_LABELS:Record<TemplateRole,string>={title:'제목',heading:'소제목',body:'본문',tableHeader:'표 머리글',tableCell:'표 본문'};
+/** Personal templates live in this window's local storage; its quota (about 5 million characters) is the real bound. */
+const MAX_TEMPLATES=500,MAX_STORED_CHARS=2_000_000;
 const KEY='achmage.hop.document-templates.v1', SELECTED='achmage.hop.selected-document-template.v1', HIDDEN='achmage.hop.hidden-document-templates.v1';
 // Summary roles of each built-in are the values its generated document actually uses (measured
 // from Kordoc 4.21.31 and HanMark 2.7.0), so edits inside an open document match its look.
@@ -64,7 +66,7 @@ export function parseDocumentTemplate(value:unknown):DocumentTemplate {
  for(const name of TEMPLATE_ROLES){const s=record(roles[name]);if(typeof s.fontFamily!=='string'||!s.fontFamily.trim()||s.fontFamily.length>80||/[\u0000-\u001f<>]/u.test(s.fontFamily)||typeof s.fontSizePt!=='number'||!Number.isFinite(s.fontSizePt)||s.fontSizePt<5||s.fontSizePt>72||!Number.isInteger(s.fontSizePt*100)||typeof s.bold!=='boolean'||typeof s.spacingPercent!=='number'||!Number.isInteger(s.spacingPercent)||s.spacingPercent< -50||s.spacingPercent>50||!['left','center','right','justify'].includes(String(s.alignment))||typeof s.lineSpacingPercent!=='number'||!Number.isInteger(s.lineSpacingPercent)||s.lineSpacingPercent<50||s.lineSpacingPercent>500)throw Error(TEMPLATE_ROLE_LABELS[name]+' 서식 값을 확인하세요.');parsed[name]={fontFamily:s.fontFamily.trim(),fontSizePt:s.fontSizePt,bold:s.bold,spacingPercent:s.spacingPercent,alignment:s.alignment as TemplateStyle['alignment'],lineSpacingPercent:s.lineSpacingPercent};}
  for(const style of Object.values(parsed))if(/["'<>;,\\]/u.test(style.fontFamily))throw Error('글꼴 이름에 지원하지 않는 문자가 있습니다.');
  let layout:TemplateLayout|undefined;
- if(p.layout!==undefined){const l=record(p.layout);if(!ENGINE_PRESETS.includes(l.enginePreset as EnginePreset)||typeof l.cover!=='boolean'||typeof l.toc!=='boolean'||typeof l.sampleMarkdown!=='string'||l.sampleMarkdown.length>32000||!l.sampleMarkdown.trim()||!['A4','A3','B4','B5','Letter'].includes(String(l.paper))||!['portrait','landscape'].includes(String(l.orientation)))throw Error('문서 구성과 미리보기 본문을 확인하세요.');layout={enginePreset:l.enginePreset as TemplateLayout['enginePreset'],cover:l.cover,toc:l.toc,sampleMarkdown:l.sampleMarkdown,paper:l.paper as TemplateLayout['paper'],orientation:l.orientation as TemplateLayout['orientation']};
+ if(p.layout!==undefined){const l=record(p.layout);if(!ENGINE_PRESETS.includes(l.enginePreset as EnginePreset)||typeof l.cover!=='boolean'||typeof l.toc!=='boolean'||typeof l.sampleMarkdown!=='string'||l.sampleMarkdown.length>200_000||!l.sampleMarkdown.trim()||!['A4','A3','B4','B5','Letter'].includes(String(l.paper))||!['portrait','landscape'].includes(String(l.orientation)))throw Error('문서 구성과 미리보기 본문을 확인하세요.');layout={enginePreset:l.enginePreset as TemplateLayout['enginePreset'],cover:l.cover,toc:l.toc,sampleMarkdown:l.sampleMarkdown,paper:l.paper as TemplateLayout['paper'],orientation:l.orientation as TemplateLayout['orientation']};
   if(l.agency!==undefined){if(typeof l.agency!=='string'||!l.agency.trim()||l.agency.length>100||/[\u0000-\u001f<>]/u.test(l.agency))throw Error('기관 이름을 확인하세요.');if(!AGENCY_PRESETS.includes(layout.enginePreset))throw Error('이 문서 유형은 기관 스타일을 지원하지 않습니다. 기관 선택을 해제하세요.');layout.agency=l.agency;}
   if(l.agencyRoleOverrides!==undefined){if(!layout.agency||!Array.isArray(l.agencyRoleOverrides)||l.agencyRoleOverrides.some(v=>!TEMPLATE_ROLES.includes(v as TemplateRole))||new Set(l.agencyRoleOverrides).size!==l.agencyRoleOverrides.length)throw Error('기관 서식을 변경할 역할을 확인하세요.');layout.agencyRoleOverrides=[...l.agencyRoleOverrides] as TemplateRole[];}
  }
@@ -85,11 +87,11 @@ export class DocumentTemplateStore {
  /** Saved rows that no longer validate are set aside (and reported), never allowed to break the list (F12). */
  quarantined=0;
  private custom():DocumentTemplate[]{
-  let rows:unknown;try{const raw=this.storage.getItem(KEY);if(!raw)return [];if(raw.length>250000)throw Error('size');rows=JSON.parse(raw);}catch{this.quarantined=1;return [];}
+  let rows:unknown;try{const raw=this.storage.getItem(KEY);if(!raw)return [];if(raw.length>MAX_STORED_CHARS)throw Error('size');rows=JSON.parse(raw);}catch{this.quarantined=1;return [];}
   if(!Array.isArray(rows)){this.quarantined=1;return [];}
   const valid:DocumentTemplate[]=[];let bad=0;
-  for(const row of rows.slice(0,50)){try{const t=parseDocumentTemplate(row);if(t.provenance==='personal'&&!t.id.startsWith('builtin-'))valid.push(t);}catch{bad++;}}
-  this.quarantined=bad+Math.max(0,rows.length-50);return valid;
+  for(const row of rows.slice(0,MAX_TEMPLATES)){try{const t=parseDocumentTemplate(row);if(t.provenance==='personal'&&!t.id.startsWith('builtin-'))valid.push(t);}catch{bad++;}}
+  this.quarantined=bad+Math.max(0,rows.length-MAX_TEMPLATES);return valid;
  }
  /** Every template, hidden built-ins included. */
  listAll():DocumentTemplate[]{return [...BUILTIN_DOCUMENT_TEMPLATES,...this.custom(),...this.extra()].map(t=>structuredClone(t));}
@@ -102,8 +104,8 @@ export class DocumentTemplateStore {
  selected():DocumentTemplate|undefined {const id=this.storage.getItem(SELECTED);return this.list().find(t=>t.id===id);}
  select(id:string|null):void{if(id===null){this.storage.removeItem(SELECTED);return;}if(!this.list().some(t=>t.id===id))throw Error('선택할 템플릿을 찾지 못했습니다.');this.storage.setItem(SELECTED,id);}
  /** The stored rows exactly as saved, unreadable ones included; null when the storage itself cannot be read safely. */
- private rawRows():unknown[]|null{try{const raw=this.storage.getItem(KEY);if(!raw)return [];if(raw.length>250000)return null;const rows=JSON.parse(raw);return Array.isArray(rows)?rows:null;}catch{return null;}}
- save(value:unknown):DocumentTemplate{const parsed=parseDocumentTemplate(value);if(parsed.id.startsWith('builtin-')||parsed.provenance!=='personal')throw Error('기본 템플릿은 복사해서 내 템플릿으로 저장하세요.');const rows=this.rawRows();if(!rows)throw Error('저장된 내 템플릿 목록을 읽지 못해 덮어쓰지 않습니다. 원본은 그대로 두었습니다.');const index=rows.findIndex(t=>!!t&&typeof t==='object'&&(t as {id?:unknown}).id===parsed.id);if(index<0)rows.push(parsed);else rows[index]=parsed;if(rows.length>50)throw Error('내 템플릿은 50개까지 보관할 수 있습니다.');const serialized=JSON.stringify(rows);if(serialized.length>250000)throw Error('템플릿 저장 용량을 넘었습니다. 설명을 줄이거나 사용하지 않는 템플릿을 삭제하세요.');this.storage.setItem(KEY,serialized);return structuredClone(parsed);}
+ private rawRows():unknown[]|null{try{const raw=this.storage.getItem(KEY);if(!raw)return [];if(raw.length>MAX_STORED_CHARS)return null;const rows=JSON.parse(raw);return Array.isArray(rows)?rows:null;}catch{return null;}}
+ save(value:unknown):DocumentTemplate{const parsed=parseDocumentTemplate(value);if(parsed.id.startsWith('builtin-')||parsed.provenance!=='personal')throw Error('기본 템플릿은 복사해서 내 템플릿으로 저장하세요.');const rows=this.rawRows();if(!rows)throw Error('저장된 내 템플릿 목록을 읽지 못해 덮어쓰지 않습니다. 원본은 그대로 두었습니다.');const index=rows.findIndex(t=>!!t&&typeof t==='object'&&(t as {id?:unknown}).id===parsed.id);if(index<0)rows.push(parsed);else rows[index]=parsed;if(rows.length>MAX_TEMPLATES)throw Error('내 템플릿은 500개까지 보관할 수 있습니다.');const serialized=JSON.stringify(rows);if(serialized.length>MAX_STORED_CHARS)throw Error('템플릿 저장 용량을 넘었습니다. 설명을 줄이거나 사용하지 않는 템플릿을 삭제하세요.');this.storage.setItem(KEY,serialized);return structuredClone(parsed);}
  remove(id:string):void{if(id.startsWith('builtin-'))throw Error('기본 템플릿은 삭제할 수 없습니다.');const rows=this.rawRows();if(!rows)throw Error('저장된 내 템플릿 목록을 읽지 못해 지우지 않습니다. 원본은 그대로 두었습니다.');this.storage.setItem(KEY,JSON.stringify(rows.filter(t=>!(t&&typeof t==='object'&&(t as {id?:unknown}).id===id))));if(this.storage.getItem(SELECTED)===id)this.storage.removeItem(SELECTED);}
  duplicate(template:DocumentTemplate):DocumentTemplate{let name='';for(const {segment} of new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(template.name)){if(name.length+segment.length>77)break;name+=segment;}return {...structuredClone(template),id:'custom-'+crypto.randomUUID(),name:name+' 사본',provenance:'personal',category:'personal',description:'내가 만든 문서 스타일'};}
 }

@@ -30,7 +30,7 @@ function object(value:unknown, keys:string[]):Record<string,unknown>{
 export function parseStructuredPlan(value:unknown):StructuredPlan{
   if(value&&typeof value==='object'&&(value as {schemaVersion?:unknown}).schemaVersion===2)return parseV2(value);
   const p=object(value,['schemaVersion','operation','paragraphs']);
-  if(p.schemaVersion!==1||p.operation!=='replace_paragraphs'||!Array.isArray(p.paragraphs)||!p.paragraphs.length||p.paragraphs.length>64)fail('구조 편집 계획의 종류나 문단 수가 올바르지 않습니다.');
+  if(p.schemaVersion!==1||p.operation!=='replace_paragraphs'||!Array.isArray(p.paragraphs)||!p.paragraphs.length||p.paragraphs.length>4000)fail('구조 편집 계획의 종류나 문단 수가 올바르지 않습니다.');
   let total=0,runs=0;
   const paragraphs=(p.paragraphs as unknown[]).map(value=>{
     const q=object(value,['runs']);
@@ -51,7 +51,7 @@ export function parseStructuredPlan(value:unknown):StructuredPlan{
     for(const r of parsed){offset+=r.text.length;if(!boundaries.has(offset))fail('글자 서식 경계가 결합 문자나 이모지를 나눕니다.');}
     return {runs:parsed};
   });
-  if(total>16000||runs>256)fail('구조 편집은 16,000자와 256개 서식 구간 이내로 제한됩니다.');
+  if(total>MAX_PLAN_CHARS||runs>MAX_PLAN_RUNS)fail('구조 편집은 50만 자와 5만 개 서식 구간 이내로 제한됩니다.');
   return {schemaVersion:1,operation:'replace_paragraphs',paragraphs};
 }
 function parseV2(value:unknown):StructuredPlan{
@@ -70,24 +70,24 @@ function parseV2(value:unknown):StructuredPlan{
     if(!['left','center','right','justify'].includes(String(f.alignment))||!Number.isInteger(f.lineSpacingPercent)||Number(f.lineSpacingPercent)<50||Number(f.lineSpacingPercent)>500)fail('문단 정렬/줄간격 범위가 올바르지 않습니다.');
     return {...result,paragraphFormat:f as unknown as ParagraphFormat};
   };
-  if(!Array.isArray(p.blocks)||!p.blocks.length||p.blocks.length>64)fail('블록은 1–64개여야 합니다.');
+  if(!Array.isArray(p.blocks)||!p.blocks.length||p.blocks.length>4000)fail('블록은 1–4,000개여야 합니다.');
   let cells=0;
   const paragraphs=(p.blocks as unknown[]).map(v=>{
     if(!v||typeof v!=='object')return fail('블록이 올바르지 않습니다.');
     if((v as {type?:unknown}).type==='paragraph'){const b=object(v,['type','runs','paragraphFormat']);return parseParagraph({runs:b.runs,paragraphFormat:b.paragraphFormat});}
-    const b=object(v,['type','rows']);if(b.type!=='table'||!Array.isArray(b.rows)||!b.rows.length||b.rows.length>20)fail('표 행 범위가 올바르지 않습니다.');
-    const rows=(b.rows as unknown[]).map(row=>{if(!Array.isArray(row)||!row.length||row.length>10)fail('표 열 범위가 올바르지 않습니다.');cells+=(row as unknown[]).length;return (row as unknown[]).map(parseParagraph);});
-    if(cells>100||rows.some(r=>r.length!==rows[0].length))fail('표는 직사각형이며 전체 100셀 이내여야 합니다.');
+    const b=object(v,['type','rows']);if(b.type!=='table'||!Array.isArray(b.rows)||!b.rows.length||b.rows.length>1000)fail('표 행 범위가 올바르지 않습니다.');
+    const rows=(b.rows as unknown[]).map(row=>{if(!Array.isArray(row)||!row.length||row.length>50)fail('표 열 범위가 올바르지 않습니다.');cells+=(row as unknown[]).length;return (row as unknown[]).map(parseParagraph);});
+    if(cells>20_000||rows.some(r=>r.length!==rows[0].length))fail('표는 직사각형이며 전체 2만 셀 이내여야 합니다.');
     return {runs:[],table:rows};
   });
   const plan:StructuredPlan={schemaVersion:2,operation:'replace_paragraphs',styles:p.styles,blocks:p.blocks,paragraphs};
-  const all=structuredParagraphs(plan);if(all.reduce((n,p)=>n+p.runs.length,0)>256||all.reduce((n,p)=>n+Array.from(p.runs.map(r=>r.text).join('')).length,0)>16000)fail('전체 편집 크기 제한을 넘었습니다.');
+  const all=structuredParagraphs(plan);if(all.reduce((n,p)=>n+p.runs.length,0)>MAX_PLAN_RUNS||all.reduce((n,p)=>n+Array.from(p.runs.map(r=>r.text).join('')).length,0)>MAX_PLAN_CHARS)fail('전체 편집 크기 제한을 넘었습니다.');
   if(Object.hasOwn(p,'paragraphs')&&!same(p.paragraphs,paragraphs))fail('정규화된 계획이 원래 블록과 다릅니다.');
   return plan;
 }
 export function paragraphEvidence(wasm:WasmBridge,section:number,paragraph:number):ParagraphEvidence{
   const length=wasm.getParagraphLength(section,paragraph);
-  if(length>16000)fail('안전한 편집 검증 범위를 넘는 문단입니다.');
+  if(length>MAX_PARAGRAPH_CHARS)fail('안전한 편집 검증 범위를 넘는 문단입니다.');
   const text=length?wasm.getTextRange(section,paragraph,0,length):'';
   const charFormats=Array.from({length:Math.max(1,length)},(_,i)=>wasm.getCharPropertiesAt(section,paragraph,i));
   return {text,paraFormat:wasm.getParaPropertiesAt(section,paragraph),charFormats};
@@ -95,14 +95,14 @@ export function paragraphEvidence(wasm:WasmBridge,section:number,paragraph:numbe
 export function captureStructuredRange(wasm:WasmBridge,identity:RhwpDocumentStateV1,selection:string,range:ParagraphRange):StructuredCapture{
   if(wasm.getSectionCount()!==1||range.section!==0)fail('현재 구조 편집은 한 구역 본문만 지원합니다.');
   const count=wasm.getParagraphCount(0);
-  if(!Number.isInteger(range.startParagraph)||!Number.isInteger(range.paragraphCount)||range.startParagraph<0||range.paragraphCount<1||range.startParagraph+range.paragraphCount>count||count>256)fail('명시한 문단 범위가 올바르지 않습니다.');
+  if(!Number.isInteger(range.startParagraph)||!Number.isInteger(range.paragraphCount)||range.startParagraph<0||range.paragraphCount<1||range.startParagraph+range.paragraphCount>count||count>MAX_BODY_PARAGRAPHS)fail('명시한 문단 범위가 올바르지 않습니다.');
   const controls=wasm.getControls();
   if(controls.some(c=>c.list!==0||c.para!==0||!['secd','cold'].includes(c.ctrlId))||controls.length>2||new Set(controls.map(c=>c.ctrlId)).size!==controls.length)unsupported('표·필드·그림 등 개체가 있는 문서는 구조 편집을 지원하지 않습니다.');
   const allParagraphs:ParagraphEvidence[]=[];let total=0;
   for(let i=0;i<count;i++){
     if(wasm.getControlTextPositions(0,i).some(n=>n!==0))unsupported('문단 중간 개체는 보존을 확인할 수 없습니다.');
     const e=paragraphEvidence(wasm,0,i),scalarLength=Array.from(e.text).length;total+=scalarLength;
-    if(total>32000)fail('안전한 문서 검증 범위 32,000자를 넘었습니다.');
+    if(total>MAX_CHECKED_CHARS)fail('안전한 문서 검증 범위 30만 자를 넘었습니다.');
     for(let j=0;j<=scalarLength;j++)if(wasm.getFieldInfoAt({sectionIndex:0,paragraphIndex:i,charOffset:j}).inField)unsupported('필드가 있는 문서는 구조 편집을 지원하지 않습니다.');
     allParagraphs.push(e);
   }
@@ -113,18 +113,25 @@ function ok(raw:string):void{
   if(value.ok!==true)fail('문서 엔진이 구조 편집을 거부했습니다.');
 }
 function same(a:unknown,b:unknown):boolean{return JSON.stringify(a)===JSON.stringify(b);}
+/**
+ * Edits read the whole body back to prove nothing else changed. These bound the cost of that check (every
+ * character's formatting is compared), not the document: a long report with tables fits well inside them.
+ */
+const MAX_BODY_PARAGRAPHS=20_000,MAX_CHECKED_CHARS=300_000,MAX_PARAGRAPH_CHARS=200_000,MAX_PLAN_CHARS=500_000,MAX_PLAN_RUNS=50_000;
+/** A picture's bytes as a short fingerprint for the before/after equality check (nothing adversarial here). */
+function fingerprint(bytes:Uint8Array):string{let a=0x811c9dc5,b=0x9e3779b9;for(let i=0;i<bytes.length;i++){a=Math.imul(a^bytes[i],16777619);b=Math.imul(b^bytes[i],2246822507)^(b>>>13);}return `${bytes.length}:${(a>>>0).toString(16)}:${(b>>>0).toString(16)}`;}
 function objectEvidence(wasm:WasmBridge,paragraph:number,controlIndex:number,kind:string):unknown{
   if(kind==='gso'){
     const handle=wasm.borrowDocumentHandle();if(!handle)fail('문서 엔진이 없습니다.');
-    const bytes=handle!.getControlImageData(0,paragraph,'[]',controlIndex);if(bytes.length>2097152)fail('2MiB를 넘는 그림은 아직 삽입 보존 검증을 지원하지 않습니다.');
-    return {properties:wasm.getPictureProperties(0,paragraph,controlIndex),bytes:Array.from(bytes)};
+    const bytes=handle!.getControlImageData(0,paragraph,'[]',controlIndex);if(bytes.length>64*1024*1024)fail('64MiB를 넘는 그림은 아직 삽입 보존 검증을 지원하지 않습니다.');
+    return {properties:wasm.getPictureProperties(0,paragraph,controlIndex),bytes:fingerprint(bytes)};
   }
-  const dimensions=wasm.getTableDimensions(0,paragraph,controlIndex);if(dimensions.cellCount>200)fail('기존 표가 보존 검증 범위를 넘었습니다.');
+  const dimensions=wasm.getTableDimensions(0,paragraph,controlIndex);if(dimensions.cellCount>100_000)fail('기존 표가 보존 검증 범위를 넘었습니다.');
   let chars=0;
   const cells=Array.from({length:dimensions.cellCount},(_,cell)=>{
-    const count=wasm.getCellParagraphCount(0,paragraph,controlIndex,cell);if(count>64)fail('표 셀 문단이 너무 많습니다.');
+    const count=wasm.getCellParagraphCount(0,paragraph,controlIndex,cell);if(count>4096)fail('표 셀 문단이 너무 많습니다.');
     return {properties:wasm.getCellOwnProperties(0,paragraph,controlIndex,cell),paragraphs:Array.from({length:count},(_,p)=>{
-      const args=[0,paragraph,controlIndex,cell,p] as const,length=wasm.getCellParagraphLength(...args);chars+=length;if(chars>32000)fail('기존 표 본문이 검증 범위를 넘었습니다.');
+      const args=[0,paragraph,controlIndex,cell,p] as const,length=wasm.getCellParagraphLength(...args);chars+=length;if(chars>MAX_CHECKED_CHARS)fail('기존 표 본문이 검증 범위를 넘었습니다.');
       return {text:wasm.getTextInCell(...args,0,length),para:wasm.getCellParaPropertiesAt(...args),chars:Array.from({length:Math.max(1,length)},(_,i)=>wasm.getCellCharPropertiesAt(...args,i))};
     })};
   });
@@ -132,10 +139,10 @@ function objectEvidence(wasm:WasmBridge,paragraph:number,controlIndex:number,kin
 }
 export function captureStructuredInsertion(wasm:WasmBridge,identity:RhwpDocumentStateV1,selection:string,paragraph:number,charOffset:number):StructuredCapture{
   if(wasm.getSectionCount()!==1)fail('새 구조 작성은 현재 한 구역 본문에서 지원합니다.');
-  const count=wasm.getParagraphCount(0);if(count>256||!Number.isInteger(paragraph)||paragraph<0||paragraph>=count)fail('커서 문단을 확인하지 못했습니다.');
-  const controls=wasm.getControls();if(controls.length>64||controls.some(c=>c.list!==0||!['secd','cold','tbl','gso'].includes(c.ctrlId)||c.ctrlId==='gso'&&(c as typeof c & {userDesc?:string}).userDesc!=='그림'))fail('중첩 개체·필드 등 보존을 검증하지 못한 문서입니다.');
+  const count=wasm.getParagraphCount(0);if(count>MAX_BODY_PARAGRAPHS||!Number.isInteger(paragraph)||paragraph<0||paragraph>=count)fail('커서 문단을 확인하지 못했습니다.');
+  const controls=wasm.getControls();if(controls.length>4096||controls.some(c=>c.list!==0||!['secd','cold','tbl','gso'].includes(c.ctrlId)||c.ctrlId==='gso'&&(c as typeof c & {userDesc?:string}).userDesc!=='그림'))fail('중첩 개체·필드 등 보존을 검증하지 못한 문서입니다.');
   const allParagraphs:ParagraphEvidence[]=[];let total=0;
-  for(let i=0;i<count;i++){const e=paragraphEvidence(wasm,0,i),n=Array.from(e.text).length;total+=n;if(total>32000)fail('본문이 검증 범위를 넘었습니다.');for(let j=0;j<=n;j++)if(wasm.getFieldInfoAt({sectionIndex:0,paragraphIndex:i,charOffset:j}).inField)fail('필드가 있는 문서는 아직 삽입할 수 없습니다.');allParagraphs.push(e);}
+  for(let i=0;i<count;i++){const e=paragraphEvidence(wasm,0,i),n=Array.from(e.text).length;total+=n;if(total>MAX_CHECKED_CHARS)fail('본문이 검증 범위를 넘었습니다.');for(let j=0;j<=n;j++)if(wasm.getFieldInfoAt({sectionIndex:0,paragraphIndex:i,charOffset:j}).inField)fail('필드가 있는 문서는 아직 삽입할 수 없습니다.');allParagraphs.push(e);}
   const target=allParagraphs[paragraph],scalars=Array.from(target.text);
   if(!Number.isInteger(charOffset)||charOffset<0||charOffset>scalars.length)fail('커서 문자 위치가 올바르지 않습니다.');
   const prefix=scalars.slice(0,charOffset).join(''),boundaries=new Set([...new Intl.Segmenter('ko',{granularity:'grapheme'}).segment(target.text)].map(s=>s.index));boundaries.add(target.text.length);
@@ -238,7 +245,7 @@ export function executeStructuredPlan(wasm:WasmBridge,capture:StructuredCapture,
 /** A bounded reuse parser for the user's already-generated annotated draft.
  * No aliases, Markdown interpretation, CSS, HTML or evaluation. */
 export function parseAnnotatedDraft(text:string):StructuredPlan{
-  if(text.length>40000)fail('주석 초안이 너무 큽니다.');
+  if(text.length>MAX_PLAN_CHARS)fail('주석 초안이 너무 큽니다.');
   const source=text.trim().replace(/^\x60\x60\x60(?:text|plaintext)?\s*\n([\s\S]*?)\n\x60\x60\x60$/,'$1');
   const lines=source.split(/\r?\n/);const paragraphs:StructuredPlan['paragraphs']=[];
   const header=/^\[(?:[^|\]\n]+\s*\|\s*)?([^,\]\n]+),\s*(\d+(?:\.\d{1,2})?)\s*pt,\s*(굵게|보통),\s*자간\s*([+-]?\d+)\s*%\]$/;

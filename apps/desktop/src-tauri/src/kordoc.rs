@@ -106,11 +106,13 @@ pub fn close(state: &KordocState, label: &str) {
         s.artifacts.retain(|_, a| a.owner != label);
     }
 }
+/// A long document with its page previews takes longer than a short one; this only stops a stuck worker.
+const WORKER_TIMEOUT: Duration = Duration::from_secs(300);
 fn message(code: &str) -> String {
     match code {
         "runtime_missing" => "문서 생성 런타임을 찾지 못했습니다. 앱 설치 구성을 확인하세요.",
         "cancelled" => "문서창이 닫혀 생성 작업을 취소했습니다.",
-        "worker_timeout" => "문서 생성 시간이 제한을 넘었습니다. 입력 분량을 줄여 다시 시도하세요.",
+        "worker_timeout" => "문서 생성이 5분 안에 끝나지 않아 멈췄습니다. 다시 시도하거나 문서를 나눠 만드세요.",
         "input_limit" | "response_limit" => "문서 요청 또는 결과가 처리 크기 제한을 넘었습니다.",
         "invalid_document" | "document_hash_mismatch" => {
             "생성 문서의 형식 또는 무결성을 확인하지 못했습니다."
@@ -178,7 +180,7 @@ pub async fn achmage_kordoc(
     let lease = begin(&state, window.label())?;
     tauri::async_runtime::spawn_blocking(move || {
         let result =
-            worker::run(&runtime, &input, &lease.cancel, Duration::from_secs(60)).map_err(message);
+            worker::run(&runtime, &input, &lease.cancel, WORKER_TIMEOUT).map_err(message);
         if lease.cancel.load(Ordering::SeqCst) {
             return Err(message("cancelled"));
         }
@@ -213,7 +215,7 @@ pub(crate) async fn generate_for_remote(
         }
     };
     let reply = tauri::async_runtime::spawn_blocking(move || {
-        worker::run(&runtime, &input, &lease.cancel, Duration::from_secs(60)).map_err(message)
+        worker::run(&runtime, &input, &lease.cancel, WORKER_TIMEOUT).map_err(message)
     })
     .await
     .map_err(|_| message("worker_io"))??;
@@ -309,7 +311,7 @@ pub async fn achmage_kordoc_prepare_generated(
     let expected = sha256.clone();
     let cancel = lease.cancel.clone();
     let (path, byte_len, lease) = tauri::async_runtime::spawn_blocking(move || {
-        let v = worker::run(&runtime, &input, &cancel, Duration::from_secs(60)).map_err(message)?;
+        let v = worker::run(&runtime, &input, &cancel, WORKER_TIMEOUT).map_err(message)?;
         if v["ok"] != true
             || v["result"]["validation"]["ok"] != true
             || v["result"]["sha256"] != expected

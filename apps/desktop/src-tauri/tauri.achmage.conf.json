@@ -10,6 +10,7 @@
     "shortDescription":"Achmage HOP — HWP/HWPX editor",
     "longDescription":"Achmage HOP opens, edits and saves HWP/HWPX documents and writes them with AI. Unofficial distribution based on HOP and rhwp; not affiliated with Hancom, HOP or rhwp.",
     "copyright":"Copyright (c) 2026 laguna821 and HOP contributors. Based on HOP and rhwp (MIT).",
+    "icon":["../../../assets/achmage/logo/32x32.png","../../../assets/achmage/logo/128x128.png","../../../assets/achmage/logo/128x128@2x.png","../../../assets/achmage/logo/icon.png","../../../assets/achmage/logo/icon.icns","../../../assets/achmage/logo/icon.ico"],
     "resources":{"resources/runtime/":"runtime/","resources/kordoc-engine/":"kordoc-engine/","resources/kordoc-runtime.json":"kordoc-runtime.json","resources/THIRD_PARTY_NOTICES.md":"THIRD_PARTY_NOTICES.md"},
     "macOS":{"files":null}
   },

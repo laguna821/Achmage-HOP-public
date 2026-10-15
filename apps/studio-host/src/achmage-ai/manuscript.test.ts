@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LOCAL_MANUSCRIPT_CHARS, REWRITE_REQUEST, manuscriptMarkdown, routerMessage, splitManuscript } from './manuscript';
+import { LOCAL_MANUSCRIPT_CHARS, REWRITE_REQUEST, asksOnlyForLook, manuscriptMarkdown, routerMessage, splitManuscript } from './manuscript';
 import { resolveDocumentTemplate } from './document-intent';
 import { classifyRequest, type RouteInput } from './request-route';
 import { roleTemplateFixture } from './document-template-fixture';
@@ -53,5 +53,14 @@ describe('pasted manuscript', () => {
   it('leaves writing requests to the model', () => {
     for (const t of ['아래 내용을 바탕으로 보고서를 작성해줘', '아래 글을 요약해서 만들어', '아래 원고를 다듬어서 서식에 넣어']) expect(REWRITE_REQUEST.test(t), t).toBe(true);
     for (const t of ['아래 텍스트를 선택한 템플릿으로 만들어', '아래 내용을 바탕체로 만들어', '위 내용을 보고서 서식으로 만들어줘']) expect(REWRITE_REQUEST.test(t), t).toBe(false);
+  });
+});
+
+describe('look-only wording for the open document', () => {
+  it.each(['서식만 바꿔줘', '내용은 그대로 두고 보고서 서식으로', '현재 문서 전체를 선택한 서식으로 바꿔줘', '문서 내용은 고치지 말고 공문 양식으로'])('typesets as written: %s', wording => {
+    expect(asksOnlyForLook(wording)).toBe(true);
+  });
+  it.each(['내용은 그대로 두고 맞춤법만 고쳐줘', '글은 그대로 두고 오타만 고쳐줘', '한글은 그대로 두고 영어로', '영어로 바꿔줘', '현재 문서 전체를 이 서식으로 바꾸고 영어로 바꿔줘', '더 공손하게 바꿔줘'])('leaves the change to the model: %s', wording => {
+    expect(asksOnlyForLook(wording)).toBe(false);
   });
 });

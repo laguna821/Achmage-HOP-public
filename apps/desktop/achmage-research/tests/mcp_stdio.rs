@@ -66,6 +66,7 @@ async fn native_action_lane_stdio_configuration_and_result() {
                     ("argv".into(), "[]".into()),
                 ]
                 .into(),
+                ..Default::default()
             },
         )
         .unwrap();

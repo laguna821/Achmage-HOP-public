@@ -19,6 +19,15 @@ fn ten() -> usize {
 pub struct SourceSettings {
     #[serde(default)]
     pub options: BTreeMap<String, String>,
+    /// A preset third-party server (Korean Law, KOSIS) is used only after the user turns it on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enabled: bool,
+}
+impl SourceSettings {
+    /// Turned on, or connected to a saved endpoint before the switch existed.
+    pub fn turned_on(&self) -> bool {
+        self.enabled || self.options.contains_key("endpoint")
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -99,7 +108,7 @@ pub fn definition(id: &str) -> Result<serde_json::Value, String> {
 }
 pub fn custom_mcp() -> serde_json::Value {
     serde_json::json!({"id":"custom-mcp","name":"사용자 MCP 연결","operator":"사용자가 지정한 서버","role":"external","protocol":"mcp","docsUrl":"https://modelcontextprotocol.io/specification/2025-06-18/basic/transports","secretFields":[],"optionFields":[
-        {"id":"transport","label":"transport: streamable_http / legacy_sse / stdio","defaultValue":"streamable_http","required":true},
+        {"id":"transport","label":"연결 방식","defaultValue":"streamable_http","required":true,"choices":[{"value":"streamable_http","label":"HTTP (Streamable HTTP)"},{"value":"legacy_sse","label":"HTTP + SSE (구형)"},{"value":"stdio","label":"이 컴퓨터의 실행파일 (stdio)"}]},
         {"id":"endpoint","label":"HTTP/SSE endpoint","required":false},
         {"id":"executable","label":"stdio 실행파일 절대 경로","required":false},
         {"id":"executable_sha256","label":"실행파일 SHA-256","required":false},

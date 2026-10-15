@@ -83,7 +83,7 @@ describe('Structured typed edits on actual pinned WASM',()=>{
  });
  it('validates unused styles and limits total cells without accepting nested or empty cell substitutes',()=>{
   const unused=v2() as ReturnType<typeof v2> & {styles:Record<string,unknown>};unused.styles.bad={fontFamily:'bad;css',fontSizePt:11,bold:false,spacingPercent:0};expect(()=>parseStructuredPlan(unused)).toThrow();
-  const over=v2();over.blocks=[{type:'table',rows:Array.from({length:11},()=>Array.from({length:10},()=>structuredClone(v2().blocks[1].rows![0][0])))}];expect(()=>parseStructuredPlan(over)).toThrow('100셀');
+  const cell=v2().blocks[1].rows![0][0],over=v2();over.blocks=[{type:'table',rows:Array.from({length:401},()=>Array.from({length:50},()=>cell))}];expect(()=>parseStructuredPlan(over)).toThrow('2만 셀');
   const empty=v2();empty.blocks[1].rows![0][0].runs=[];expect(()=>parseStructuredPlan(empty)).toThrow();
  });
  it('inserts new styled blocks after the caret while retaining an existing real table, save/reopen and one Undo/Redo',async()=>{

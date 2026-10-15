@@ -139,6 +139,7 @@ impl ClaudeHost {
                     None,
                     &cancel,
                     Duration::from_secs(600),
+                    None,
                     |_| Ok(()),
                 )?;
                 if code != 0 {
@@ -274,7 +275,9 @@ impl ClaudeHost {
                     &args,
                     Some(&frame),
                     &cancel,
-                    Duration::from_secs(180),
+                    // Long documents take minutes to write; silence, not length, ends a turn.
+                    Duration::from_secs(900),
+                    Some(Duration::from_secs(120)),
                     |bytes| {
                         stream.push(bytes)?;
                         update(&shared, generation, |s| {
@@ -306,8 +309,7 @@ impl ClaudeHost {
                 if let Err(e) = result {
                     s["turn"]["text"] = Value::Null;
                     s["turn"]["errorCode"] = json!(e);
-                    s["turn"]["message"] =
-                        json!("응답을 완료하지 못했습니다. 자동 재전송하지 않습니다.");
+                    s["turn"]["message"] = json!(crate::turn_failure_message(e));
                     if e == "authentication_failed" {
                         s["auth"] = json!({"status":"signed_out","sessionGeneration":null})
                     }
@@ -355,6 +357,7 @@ fn status(cfg: &Config, cancel: &AtomicBool) -> Result<Option<&'static str>> {
         None,
         cancel,
         Duration::from_secs(20),
+        None,
         |b| {
             if bytes.len() + b.len() > 64 * 1024 {
                 return Err("status_limit");

@@ -21,6 +21,25 @@ const charCount = (text: string) => Array.from(text).length;
 export const LOCAL_MANUSCRIPT_CHARS = 8000;
 /** The instruction asks for new or changed writing (not "put this text into the template"), so a model writes it. */
 export const REWRITE_REQUEST = /(?:바탕으로|참고|토대로|기반으로|요약|다듬|고쳐|수정|윤문|교정|줄여|늘려|확장|보강|번역|새로\s*(?:써|작성)|다시\s*(?:써|작성)|작성해|써\s*(?:줘|주세요))/u;
+/**
+ * Recomposing the open document: wording that changes what it says, not only how it looks (a rewrite, a cut,
+ * another language, a tone, a spelling fix). Then the model answers with the changed blocks.
+ */
+export const CONTENT_CHANGE_REQUEST = new RegExp(`${REWRITE_REQUEST.source}|추가|빼\\s*(?:고|줘|주)|삭제|지워|분량|(?:\\d+|한|두|세|네|다섯)\\s*(?:쪽|페이지|장)\\s*(?:으로|로|이내|안|분량|짜리)|짧게|길게|간략|간추|핵심|개조식|문체|어투|말투|높임|반말|표로\\s*(?:만들|정리|바꿔)|목록으로|순서|합쳐|나눠|채워|정리|뻥튀기|영어|영문|영작|일본어|중국어|한국어로|공손|정중|격식|매끄럽|자연스럽|맞춤법|띄어쓰기|오탈자|오타|어색|쉽게|쉬운\\s*말|풀어\\s*(?:써|줘|주)|바꿔\\s*써`, 'u');
+/** "내용은 그대로", "서식만": a request to keep the text ("글" on its own, not inside "한글"). */
+export const AS_WRITTEN_REQUEST = /(?:내용|문장|본문|(?<![가-힣])글)(?:은|을|는|이)?\s*(?:그대로|유지|(?:바꾸|수정하|고치)지\s*말)|(?:서식|양식|형식|모양)만/u;
+const AS_WRITTEN_PHRASES = new RegExp(AS_WRITTEN_REQUEST.source, 'gu');
+/** Wording about the look: a template, form or layout. */
+const LOOK_REQUEST = /서식|양식|템플릿|모양|스타일|형식|조판|레이아웃|디자인/u;
+/**
+ * Only the look is asked for, so the app may typeset the open document as written with no model: "내용은 그대로",
+ * "서식만", or wording about the template, and nothing else that changes the text ("내용은 그대로 두고 맞춤법만
+ * 고쳐줘" still asks for a fix). Anything else goes to the model.
+ */
+export const asksOnlyForLook = (wording: string): boolean =>
+  (AS_WRITTEN_REQUEST.test(wording) || LOOK_REQUEST.test(wording)) && !CONTENT_CHANGE_REQUEST.test(wording.replace(AS_WRITTEN_PHRASES, ' '));
+/** The most a model reads of the open document in one request (about 250,000 characters). */
+export const MODEL_DOCUMENT_CHARS = 250_000;
 
 export function splitManuscript(text: string): SplitMessage {
   const normalized = text.replace(/\r\n?/g, '\n');
@@ -68,7 +87,13 @@ export function routerMessage(text: string, edge = 600): string {
  * by text rather than a sibling item, e.g. "1. 추진 배경") becomes a chapter heading.
  */
 export function manuscriptMarkdown(manuscript: string): string {
-  const sentence = (text: string) => /[.!?。…]$|[다요음함임됨]\s*$/u.test(text);
+  return outlineToMarkdown(structureManuscript(manuscriptNodes(manuscript)));
+}
+
+const sentence = (text: string) => /[.!?。…]$|[다요음함임됨]\s*$/u.test(text);
+
+/** The manuscript's lines read into an outline (headings, items, labels, tables), before titles and chapters are chosen. */
+export function manuscriptNodes(manuscript: string): OutlineNode[] {
   // A short heading line ("1. 추진 배경", "Ⅱ. 현황", "제2장 개요") is never the start of a sentence broken
   // across lines, so the next line does not continue it. Chapter wording without a list marker becomes ##.
   const lines = manuscript.replace(/\r\n?/g, '\n').split('\n').flatMap(line => {
@@ -77,17 +102,21 @@ export function manuscriptMarkdown(manuscript: string): string {
     if (/^(?:제\s*\d+\s*[장절편부]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+\.)\s*\S/u.test(trimmed)) return [`## ${trimmed}`, ''];
     return hasListMarker(trimmed) ? [line, ''] : [line];
   });
-  const nodes: OutlineNode[] = parseOutline(lines.join('\n'));
-  const first = nodes[0];
+  return parseOutline(lines.join('\n'));
+}
+
+/** A short first line that is not a sentence becomes the title; a short top-level item that opens a section becomes a chapter. */
+export function structureManuscript(input: readonly OutlineNode[]): OutlineNode[] {
+  const nodes = [...input], first = nodes[0];
   if (first && first.kind === 'paragraph' && !nodes.some(n => n.kind === 'heading' && n.level === 1)
     && charCount(first.text) <= 80 && !sentence(first.text)) {
     nodes[0] = { kind: 'heading', level: 1, text: first.text };
   }
   const titled = nodes.filter(n => n.kind === 'heading' && n.level === 1).length === 1;
-  return outlineToMarkdown(nodes.map((n, index) => {
+  return nodes.map((n, index) => {
     const next = nodes[index + 1];
     const opensSection = n.kind === 'item' && n.level === 1 && charCount(n.text) <= 40 && !sentence(n.text)
       && !!next && !(next.kind === 'item' && next.level === 1);
     return opensSection ? { kind: 'heading', level: titled ? 2 : 1, text: n.text } : n;
-  }));
+  });
 }

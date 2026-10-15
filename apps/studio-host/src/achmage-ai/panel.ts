@@ -5,9 +5,11 @@ import { AiDocument, type Capture } from './document';
 import { prepareStructuredEdit, decodeStructuredResponse, mentionsWholeDocument, resolveDocumentTemplate } from './document-intent';
 import { classifyRequest, describeRoute, needsStructure, type Route, type RouteInput } from './request-route';
 import { buildDocumentStateCard, type DocumentStateCard } from './document-state-card';
-import { maskNotice, maskPersonal, restorePersonal, type MaskedText } from './outbound-gate';
+import { hasPersonalToken, maskNotice, maskPersonal, restorePersonal, type MaskedText } from './outbound-gate';
 import { decodeRouterReply, describeOperation, looksLikeRouterAction, mentionsTemplate, offerOperations, routeForOperation, routerPrompt, WHOLE_DOCUMENT_SCOPE, type OperationId, type TemplateOffer } from './intent-router';
 import {captureWholeDocumentContext} from './whole-document-context';
+import { documentManuscript, documentManuscriptNotices, documentMarkdown, maskedDocumentBlocks, type DocumentManuscript } from './document-manuscript';
+import { applyBlockPatch, blockPatchSummary, parseBlockPatch } from './block-patch';
 import { normalizeMultiReplacement } from './multi-range';
 import { calculatorChoices, fixWeekdays } from './calculators';
 import { fillProfile, loadProfile, profilePromptLine, saveProfile, PROFILE_FIELDS, type UserProfile } from './user-profile';
@@ -16,7 +18,7 @@ import { templateLayout, templateGroup, COVER_TOC_PRESETS, BUILTIN_DOCUMENT_TEMP
 import type { RhwpDocumentStateV1 } from '@/upstream/document-agent';
 import {kordocAuthoringPrompt,createKordocDocument,prepareKordocAuthoring,openRecoveredDocumentWindow} from './kordoc-authoring';
 import { installDocumentTemplates } from './template-picker';
-import { LOCAL_MANUSCRIPT_CHARS, REWRITE_REQUEST, manuscriptMarkdown, splitManuscript } from './manuscript';
+import { AS_WRITTEN_REQUEST, LOCAL_MANUSCRIPT_CHARS, MODEL_DOCUMENT_CHARS, REWRITE_REQUEST, asksOnlyForLook, manuscriptMarkdown, splitManuscript } from './manuscript';
 import { ensureDesktopFontsAvailable, resolveDesktopFont } from '../core/desktop-local-fonts';
 import { PANEL_MARKUP, AI_BADGE } from './panel-view';
 import { installInlineEditor } from './inline';
@@ -41,7 +43,12 @@ function replacedLayoutNotices(removed: string[]): string[] {
 }
 /** Engine authoring hints addressed to the writer (summary-box syntax, preview caveats) are not shown to the user. */
 function userFacingEngineNotice(notice: string): boolean {
-  return !/^미리보기는 Kordoc 조판 결과입니다|요약박스가 없습니다/u.test(notice);
+  // Renderer notes about its own preview geometry ("분할 지오메트리 … region") are not about the document.
+  return !/^미리보기는 Kordoc 조판 결과입니다|요약박스가 없습니다|지오메트리|region/u.test(notice);
+}
+/** The chat keeps what a block patch changed, not its JSON. */
+function blockPatchHistory(reply: string, count: number): string {
+  try { return 'AI가 ' + blockPatchSummary(parseBlockPatch(reply, count), count); } catch { return '문서 변경 응답을 읽지 못했습니다.'; }
 }
 function documentDraftSummary(markdown: string): string {
   const title = /^#\s+(.+)$/m.exec(markdown)?.[1]?.trim(), sections = (markdown.match(/^##\s+/gm) ?? []).length, tables = (markdown.match(/^\|\s*-{3,}/gm) ?? []).length;
@@ -73,7 +80,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   const q = <T extends HTMLElement>(selector: string) => panel.querySelector<T>(selector)!;
   const button = (name: string) => q<HTMLButtonElement>(`[data-action="${name}"]`);
   // Toolbar buttons that open an extension's action.
-  const extensionButtons: [string, string][] = [['templates','document-templates'],['research','research'],['mcp','research']];
+  const extensionButtons: [string, string][] = [['templates','document-templates'],['research','research'],['mcp','research-settings']];
   const prompt = q<HTMLTextAreaElement>('.achmage-prompt'), mode = q<HTMLInputElement>('.achmage-edit-mode');
   // If an edit and its rollback both fail, the document as it was just before opens in a new window.
   const doc = new AiDocument(deps.wasm, deps.input, deps.eventBus, deps.view, deps.dirty, bytes => openRecoveredDocumentWindow(bytes, deps.wasm.fileName));
@@ -92,7 +99,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   try { savedProvider = loadProvider(localStorage); } catch { savedProvider = null; }
   try { history = loadHistory(localStorage); const saved = localStorage.getItem(PANEL_WIDTH_KEY); if (saved !== null) width = panelWidth(Number(saved)); } catch { /* unavailable storage keeps a working in-memory session */ }
   type RouterPlan = { text: string; template?: DocumentTemplate; card: DocumentStateCard; templates: TemplateOffer[]; document: string; selection: string };
-  let request: { id: string; payload: string; mask?: MaskedText; failed?: boolean; completedAt?: number; routedMs?: number; lastTextLength?: number; lastTextAt?: number; model?: string; effort?: string; router?: RouterPlan; capture?: Capture; structured?: StructuredCapture; kordoc?: string; inPlace?: { identity: RhwpDocumentStateV1; hideFirstPage: boolean; toc?: boolean }; styleContext?: DocumentTemplate; notices?: string[]; startedAt: number; firstTextAt?: number; session: string; provider: ProviderId; completed: boolean; stale: boolean } | null = null;
+  let request: { id: string; payload: string; mask?: MaskedText; failed?: boolean; completedAt?: number; routedMs?: number; lastTextLength?: number; lastTextAt?: number; model?: string; effort?: string; router?: RouterPlan; capture?: Capture; structured?: StructuredCapture; kordoc?: string; blockPatch?: { blocks: string[] }; local?: boolean; inPlace?: { identity: RhwpDocumentStateV1; hideFirstPage: boolean; toc?: boolean }; styleContext?: DocumentTemplate; notices?: string[]; startedAt: number; firstTextAt?: number; session: string; provider: ProviderId; completed: boolean; stale: boolean } | null = null;
   /** The AI only hears turns after this point; '새 대화 시작' moves it. Plain answers can be inserted as-is. */
   let contextFrom = 0, lastAnswer: string | undefined, conversationSession: string | null = null;
   let profile: UserProfile = {};
@@ -113,8 +120,10 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   };
   /** "AI 3.2초 · 적용 0.4초": waiting for the model and local application are reported separately. */
   const seconds = (ms: number) => ms < 10_000 ? (ms / 1000).toFixed(1) + '초' : Math.round(ms / 1000) + '초';
-  const timing = (done: { startedAt: number; completedAt?: number; routedMs?: number }, applyMs: number) =>
-    `(${done.routedMs !== undefined ? '요청 이해 ' + seconds(done.routedMs) + ' · ' : ''}AI ${seconds((done.completedAt ?? performance.now()) - done.startedAt)} · 적용 ${seconds(applyMs)})`;
+  const timing = (done: { startedAt: number; completedAt?: number; routedMs?: number; local?: boolean }, applyMs: number) =>
+    // A request the app handled alone spent no time waiting for a model.
+    done.local ? `(${done.routedMs !== undefined ? '요청 이해 ' + seconds(done.routedMs) + ' · ' : ''}조판·적용 ${seconds(applyMs)})`
+      : `(${done.routedMs !== undefined ? '요청 이해 ' + seconds(done.routedMs) + ' · ' : ''}AI ${seconds((done.completedAt ?? performance.now()) - done.startedAt)} · 적용 ${seconds(applyMs)})`;
   let publishedWorking = false;
   // Outcomes kept only in the transcript are also told to a waiting inline popover.
   const settle = (text: string, tone: 'error' | 'info') => publishPanelStatus({ working: false, final: true, message: { text, tone } });
@@ -221,11 +230,11 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
         if (request.router) { const routed = request; void routeReply(routed, reply.text); }
         else {
           // A document draft belongs in the document window; the chat keeps a short, human-readable line.
-          remember({ id: request.id, provider: request.provider, role: 'assistant', text: request.kordoc ? documentDraftSummary(reply.text) : reply.text, at: Date.now() });
+          remember({ id: request.id, provider: request.provider, role: 'assistant', text: request.blockPatch ? blockPatchHistory(reply.text, request.blockPatch.blocks.length) : request.kordoc ? documentDraftSummary(reply.text) : reply.text, at: Date.now() });
           if (request.capture || request.structured || request.kordoc) {
             const completed = request;
             if (reply.unknown.length) { if (request === completed) request = null; message('AI 응답에 보내지 않은 개인정보 표시(' + reply.unknown.join(', ') + ')가 있어 문서에 적용하지 않았습니다.'); }
-            else { if (reply.missing) (completed.notices ??= []).push(`AI 결과에서 개인정보 ${reply.missing}건이 빠졌습니다. 필요하면 다시 넣어 주세요.`); void applyResponse(completed, reply.text); }
+            else { if (reply.missing && !completed.blockPatch) (completed.notices ??= []).push(`AI 결과에서 개인정보 ${reply.missing}건이 빠졌습니다. 필요하면 다시 넣어 주세요.`); void applyResponse(completed, reply.text); }
           }
         }
       }
@@ -247,7 +256,8 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     }
     button('cancel-login').hidden = state?.auth.status !== 'pending'; button('cancel-login').disabled = locked;
     button('logout').disabled = locked || state?.busy === true || !signed;
-    button('send').disabled = locked || state?.busy === true || composing || !signed || !prompt.value.trim() || (state?.selectedProvider==='openai'&&state.modelCatalogStatus!==undefined&&state.modelCatalogStatus!=='ready');
+    // Signed out, a look-only recompose still runs (the app typesets it); anything else says to sign in first.
+    button('send').disabled = locked || state?.busy === true || composing || !prompt.value.trim() || signed && state?.selectedProvider==='openai'&&state.modelCatalogStatus!==undefined&&state.modelCatalogStatus!=='ready';
     button('cancel-turn').hidden = !running; button('cancel-turn').disabled = locked;
     button('send').hidden = !!running;
     mode.disabled = locked || !!running; prompt.readOnly = locked;
@@ -271,7 +281,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     q('.achmage-pending').hidden = !(state?.auth.status === 'pending' || currentTurn && running || applying);
     const now = performance.now(), waited = request && !applying ? now - request.startedAt : 0;
     const silentFor = request && running ? now - (request.lastTextAt ?? request.startedAt) : 0, started = !!request?.lastTextLength;
-    const stage = applying ? '문서에 반영하고 있어요' : request?.router ? '요청을 이해하고 있어요' : request?.kordoc ? '서식에 맞춰 문서를 쓰고 있어요' : request?.structured ? '문서 내용을 준비하고 있어요' : '답변을 준비하고 있어요';
+    const stage = applying ? '문서에 반영하고 있어요' : request?.router ? '요청을 이해하고 있어요' : request?.blockPatch ? '바꿀 부분을 고르고 있어요' : request?.kordoc ? '서식에 맞춰 문서를 쓰고 있어요' : request?.structured ? '문서 내용을 준비하고 있어요' : '답변을 준비하고 있어요';
     const stalled = started && silentFor > 30_000;
     q('.achmage-pending-label').textContent = stage + (waited >= 2000 ? ` · ${Math.floor(waited / 1000)}초` : '') + (stalled ? ` · ${Math.floor(silentFor / 1000)}초째 새 내용이 없습니다. 기다리거나 ■로 중지하세요.` : !started && waited >= 20_000 && running ? ' · AI가 내용을 구상하고 있어요' : '');
     button('cancel-turn').classList.toggle('is-emphasized', stalled);
@@ -292,6 +302,25 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   }
   async function applyResponse(completed: NonNullable<typeof request>, reply: string, asWritten = false): Promise<void> {
     if (!completed.capture && !completed.structured && !completed.kordoc) return;
+    if (completed.blockPatch && !asWritten) {
+      // The model answered with the blocks it changes; every other block is typeset exactly as read.
+      const blocks = completed.blockPatch.blocks;
+      try {
+        const patch = parseBlockPatch(reply, blocks.length), fixes: string[] = [], missing = new Set<string>();
+        for (const change of patch.changes) {
+          // A token written with JSON escapes (\u3014…) only becomes visible after decoding.
+          const restored = completed.mask ? restorePersonal(change.markdown, completed.mask) : { text: change.markdown, unknown: [] };
+          if (restored.unknown.length || hasPersonalToken(restored.text)) throw Error('AI 응답에 보내지 않은 개인정보 표시가 있어 문서에 적용하지 않았습니다.');
+          const weekdays = fixWeekdays(restored.text), profiled = fillProfile(weekdays.text, profile, { json: false });
+          fixes.push(...weekdays.fixes); profiled.missing.forEach(field => missing.add(field)); change.markdown = profiled.text;
+        }
+        const notices = completed.notices ??= [];
+        notices.unshift(patch.changes.length ? `AI가 ${blockPatchSummary(patch, blocks.length)} 나머지 블록은 원문 그대로입니다.` : 'AI가 바꿀 내용이 없다고 답해 원문 그대로 조판했습니다.');
+        if (fixes.length) notices.push('요일을 바로잡았습니다: ' + fixes.join(', '));
+        if (missing.size) notices.push(`내 정보의 ${[...missing].join('·')}이(가) 비어 있어 〔${[...missing][0]}〕 자리를 남겼습니다. 계정 메뉴의 '문서에 넣을 내 정보'에서 채울 수 있습니다.`);
+        reply = applyBlockPatch(blocks, patch); asWritten = true;
+      } catch (error) { message(error instanceof Error ? error.message : 'AI 응답을 문서에 적용하지 못했습니다.'); return; }
+    }
     // Weekdays are computed, not trusted: a written "2026. 1. 1.(수)" becomes (목) before it is applied.
     // The user's own manuscript (asWritten) is typeset exactly as pasted.
     const weekdays = asWritten ? { text: reply, fixes: [] as string[] } : fixWeekdays(reply), profiled = asWritten ? { text: weekdays.text, missing: [] as string[] } : fillProfile(weekdays.text, profile, { json: !!completed.structured }), text = profiled.text;
@@ -302,7 +331,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     try {
       if(completed.kordoc&&completed.styleContext){
         const inPlace=completed.inPlace,name=completed.styleContext.name;
-        const result=await createKordocDocument(text,completed.styleContext,()=>!disposed&&request===completed&&!composing&&!completed.stale&&sameAuthSession(connection.current,completed.session)&&generationIdentity()===completed.kordoc,
+        const result=await createKordocDocument(text,completed.styleContext,()=>!disposed&&request===completed&&!composing&&!completed.stale&&(completed.local||sameAuthSession(connection.current,completed.session))&&generationIdentity()===completed.kordoc,
           inPlace?async bytes=>{const applied=await doc.applyWholeDocument(inPlace.identity,bytes,{hideFirstPage:inPlace.hideFirstPage,toc:inPlace.toc});return [...replacedLayoutNotices(applied.removedLayout),...(applied.toc?[`목차 ${applied.toc.entries}줄에 쪽 번호(${applied.toc.pages.join(', ')})를 넣었습니다.`]:[]),...(applied.tocFailure?[`목차 쪽 번호는 넣지 못했습니다(${applied.tocFailure}). 문서는 그대로 적용했습니다.`]:[])];}:undefined);
         if(request===completed)request=null;
         lastApplied=undefined;
@@ -404,13 +433,18 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   }
   async function send(captured?: Capture, instruction?: string, options: { whole?: boolean; routed?: boolean } = {}): Promise<void> {
     const state = connection.current;
-    if (composing || applying || connection.busy || state?.commandPending || state?.busy || state?.auth.status !== 'signed_in') { message(busyMessage()); return; }
-    const text = (instruction ?? prompt.value).trim(), session = authSession(state);
-    if (!text || !session) return;
+    const text = (instruction ?? prompt.value).trim();
     let template: DocumentTemplate | undefined;
     // A broken saved template never blocks a request that does not need one (F12).
     try { template=documentTemplates?.current(); } catch { template=undefined; message('저장된 문서 서식을 읽지 못해 서식 없이 진행합니다. 서식 창에서 확인해 주세요.', 'info'); }
+    // "문서 전체를 이 서식으로 바꿔줘" is typeset by the app: no sign-in, no routing turn, nothing sent anywhere.
+    const look = lookOnlyRoute(text, captured, template, options.whole === true);
+    if (composing || applying || connection.busy || state?.commandPending || state?.busy || !look && state?.auth.status !== 'signed_in') { message(busyMessage()); return; }
+    const session = authSession(state);
+    if (!text || !session && !look) return;
     choices = null;
+    if (look) { await execute(look, { text, template, session: session ?? '', local: true, rememberUser: true, clearPrompt: instruction === undefined }); return; }
+    if (!session) return;
     // Explicit UI requests (inline popover, Ctrl+A, the "선택한 본문 수정" toggle) already say what to change.
     // A formatting wording on a captured selection may mean "just bold it" or "rewrite with this font"; the router decides.
     const explicit = (!!captured && !(routerEnabled && needsStructure(text))) || options.whole === true || mode.checked && !options.routed;
@@ -420,6 +454,14 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
       return;
     }
     await startRouter(text, template, session, instruction === undefined);
+  }
+  /** A recompose of the open document that only asks for a new look, recognised without a model. */
+  function lookOnlyRoute(text: string, captured: Capture | undefined, template: DocumentTemplate | undefined, whole: boolean): Route | undefined {
+    if (!text || captured || template?.pack || !template && !whole || deps.wasm.pageCount === 0) return undefined;
+    // Only a clear look-only wording skips the model; Ctrl+A with no template chosen must say it ("서식만", "내용은 그대로").
+    if (!(template ? asksOnlyForLook(text) : AS_WRITTEN_REQUEST.test(text) && asksOnlyForLook(text))) return undefined;
+    const route = classifyRequest(routeInput(text, { captured: false, whole, template: !!template }, false));
+    return route.kind === 'compose' && route.recompose ? route : undefined;
   }
   /** One model turn decides what a free-form message means (answer, one operation, or a short question). */
   async function startRouter(text: string, template: DocumentTemplate | undefined, session: string, clearPrompt: boolean): Promise<void> {
@@ -539,7 +581,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     finally { applying = false; render(); }
   }
   /** routed: chosen by the model, so it never escalates into a different operation on failure. */
-  interface ExecutionContext { text: string; promptText?: string; captured?: Capture; template?: DocumentTemplate; session: string; rememberUser: boolean; clearPrompt: boolean; routedMs?: number; routed?: boolean }
+  interface ExecutionContext { text: string; promptText?: string; captured?: Capture; template?: DocumentTemplate; session: string; rememberUser: boolean; clearPrompt: boolean; routedMs?: number; routed?: boolean; /** Handled by the app alone (no model): no AI session is needed. */ local?: boolean }
   /** Returns whether the work started (a request was sent, or a local change was applied). */
   async function execute(route: Route, ctx: ExecutionContext): Promise<boolean> {
     if (route.kind === 'restyle') return restyle(ctx.template, ctx.text);
@@ -548,7 +590,9 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     if (route.kind === 'calculate') return calculate(route.calc);
     if (route.kind === 'toc') return refreshToc();
     const state = connection.current;
-    if (!state || composing || applying || connection.busy || state.commandPending || state.busy || !sameAuthSession(state, ctx.session)) { message(busyMessage()); return false; }
+    // A local request (typeset by the app) also runs before this window has read the AI state.
+    if (!state && !ctx.local || composing || applying || connection.busy || state?.commandPending || state?.busy || !ctx.local && !sameAuthSession(state, ctx.session)) { message(busyMessage()); return false; }
+    const provider: ProviderId = state?.selectedProvider ?? 'openai';
     let captured = ctx.captured;
     const { text, template, session } = ctx, ask = ctx.promptText ?? text;
     if (route.kind === 'insert-answer') {
@@ -559,52 +603,67 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
       catch (error) { message(error instanceof Error ? error.message : '답변을 넣지 못했습니다.'); return false; }
       finally { applying = false; render(); }
     }
-    const id = crypto.randomUUID(); let payload = ask, capture: Capture | undefined, structured: StructuredCapture | undefined, styleContext: DocumentTemplate | undefined, kordoc:string|undefined, inPlace:{identity:RhwpDocumentStateV1;hideFirstPage:boolean;toc?:boolean}|undefined, notices: string[] = [];
+    const id = crypto.randomUUID(); let payload = ask, capture: Capture | undefined, structured: StructuredCapture | undefined, styleContext: DocumentTemplate | undefined, kordoc:string|undefined, inPlace:{identity:RhwpDocumentStateV1;hideFirstPage:boolean;toc?:boolean}|undefined, notices: string[] = [], documentRead: DocumentManuscript | undefined, asWrittenDocument = false, documentMask: MaskedText | undefined;
     if (route.kind === 'needs-template') { message('문서 서식 버튼에서 적용할 서식을 선택해 주세요. 현재 본문은 앱이 직접 읽습니다.'); return false; }
     if ((route.kind === 'structured' || route.kind === 'selection-edit') && route.usesSelection && !captured) {
       try { captured = doc.captureSelection(); } catch (error) { message(error instanceof Error ? error.message : '선택한 본문을 읽지 못했습니다.'); return false; }
     }
     /** Template-engine authoring: a new document, a blank window, or the open document recomposed (one Ctrl+Z). */
-    const compose = async (recompose: boolean, fallback: boolean, extraNotices: string[] = []): Promise<boolean> => {
+    // asWritten: a recompose that only asks for the look may be typeset from the document itself, with no model.
+    const compose = async (recompose: boolean, fallback: boolean, extraNotices: string[] = [], asWritten = false): Promise<boolean> => {
       // Whole-document inline edits always run; without a chosen style the default report template is used and disclosed.
       const chosen = template ?? (fallback ? structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]) : undefined);
       if (!chosen) { message('문서 서식 버튼에서 적용할 서식을 선택해 주세요. 현재 본문은 앱이 직접 읽습니다.'); return false; }
       if (chosen.pack?.strategy === 'fixed') { message(`'${chosen.name}'은 빈 양식 채우기 전용이라 문서 생성은 미지원입니다. 문서 서식 창의 '빈 양식 열기'를 쓰세요.`); return false; }
       try{
         const resolved=resolveDocumentTemplate(chosen,text);styleContext=resolved.template;notices=[...resolved.notices,...extraNotices,...(fallback&&!template?[`선택한 문서 서식이 없어 '${chosen.name}' 서식으로 다시 구성했습니다.`]:[])];kordoc=generationIdentity();
-        const source=recompose?captureWholeDocumentContext(deps.wasm):undefined;
+        // The open document is read by the app, never retyped: as written (no model), or as numbered blocks the model patches.
+        documentRead=recompose?documentManuscript(captureWholeDocumentContext(deps.wasm).sections):undefined;
+        const wording=`${text}\n${ask}`;asWrittenDocument=!!documentRead&&asWritten&&!styleContext.pack&&asksOnlyForLook(wording);
+        if(documentRead){notices.push(...documentManuscriptNotices(documentRead));const chars=documentRead.blocks.reduce((n,b)=>n+b.length,0);if(!asWrittenDocument&&chars>MODEL_DOCUMENT_CHARS)throw Error(`문서가 너무 길어(약 ${chars.toLocaleString()}자) AI가 한 번에 읽을 수 없습니다. 내용은 그대로 두고 서식만 바꾸는 요청은 AI 없이 바로 조판합니다.`);}
+        // Typeset as written, a document whose title or chapters are not plain lines (or that has none) gets no
+        // cover or contents page instead of an engine refusal: the engine builds them from # and ## headings.
+        if(asWrittenDocument&&documentRead){const layout=templateLayout(styleContext),title=documentRead.blocks.some(b=>/^# /.test(b)),chapters=documentRead.blocks.some(b=>/^## /.test(b)),cover=layout.cover&&!title,toc=layout.toc&&!chapters;
+          if(cover||toc){styleContext={...styleContext,layout:{...layout,...(cover?{cover:false}:{}),...(toc?{toc:false}:{})}};notices.push(`문서에서 ${cover&&toc?'제목과 장 제목':cover?'제목':'장 제목'}을 찾지 못해 ${cover&&toc?'표지와 목차':cover?'표지':'목차'} 없이 조판했습니다.`);}}
         // "바꿔/적용" of the open document, or a fresh blank document, is filled in this window (one Ctrl+Z).
         if(deps.wasm.pageCount>0&&(recompose||doc.isBlank())){const layout=templateLayout(styleContext);inPlace={identity:doc.identity(),hideFirstPage:layout.cover&&COVER_TOC_PRESETS.includes(layout.enginePreset),toc:layout.toc===true};}
         applying=true;render();const families=await prepareKordocAuthoring(styleContext);
         const available=await ensureDesktopFontsAvailable(families);
         if(families.some(family=>!available.has(family)))throw Error('템플릿에 지정한 글꼴을 사용할 수 없습니다. 문서 서식에서 글꼴을 확인하세요.');
-        if(disposed||composing||!sameAuthSession(connection.current,session)||generationIdentity()!==kordoc)throw Error('문서 또는 계정이 바뀌어 작성을 멈췄습니다.');
-        payload=kordocAuthoringPrompt(ask,styleContext,source?.source);
+        if(disposed||composing||!ctx.local&&!sameAuthSession(connection.current,session)||generationIdentity()!==kordoc)throw Error('문서 또는 계정이 바뀌어 작성을 멈췄습니다.');
+        const shown=documentRead&&!asWrittenDocument&&!ctx.local?maskedDocumentBlocks(documentRead):undefined;documentMask=shown?.mask;
+        payload=kordocAuthoringPrompt(ask,styleContext,shown?.blocks);
         return true;
       }catch(error){message(error instanceof Error?error.message:'문서 엔진을 준비하지 못했습니다.');return false;}
       finally{applying=false;render();}
     };
+    /** Typesets Markdown the app read itself (no model call, no tokens); the result is still one Ctrl+Z. */
+    const typesetLocally = async (markdown: string, headline: string): Promise<boolean> => {
+      const local: NonNullable<typeof request> = { id, payload: '', kordoc, inPlace, styleContext, notices: [headline, ...notices], startedAt: performance.now(), session, provider: provider, completed: true, stale: false, local: true };
+      request = local;
+      if (ctx.rememberUser) remember({ id, provider: provider, role: 'user', text, at: Date.now() });
+      if (ctx.clearPrompt) prompt.value = '';
+      render();
+      await applyResponse(local, markdown, true);
+      if (request === local) request = null;
+      render();
+      return true;
+    };
     if (route.kind === 'compose') {
-      if (!await compose(route.recompose, route.fallbackTemplate)) return false;
+      if (!await compose(route.recompose, route.fallbackTemplate, [], true)) return false;
+      // The open document in a new look, sentences untouched: read and typeset by the app (within the snapshot bounds).
+      if (route.recompose && asWrittenDocument && documentRead && kordoc && styleContext)
+        return typesetLocally(documentMarkdown(documentRead.blocks), `AI가 글을 다시 쓰지 않고, 열린 문서의 제목·항목·표를 앱이 읽어 '${styleContext.name}' 서식으로 조판했습니다. 문장은 그대로이고 번호·기호는 서식의 모양을 따릅니다. 내용까지 고치려면 '요약해서', '고쳐서'처럼 함께 요청하세요.`);
       // A long pasted manuscript to be put into the template is typeset as written, without a model:
       // retyping 25 pages would hit the model's output length and could change the text.
       const { instruction, manuscript } = splitManuscript(text), manuscriptChars = Array.from(manuscript).length;
-      if (!route.recompose && kordoc && styleContext && manuscriptChars > LOCAL_MANUSCRIPT_CHARS && !REWRITE_REQUEST.test(instruction)) {
-        const local: NonNullable<typeof request> = { id, payload: '', kordoc, inPlace, styleContext, notices: [`원고가 길어(${manuscriptChars.toLocaleString()}자) AI가 다시 쓰지 않고, 원고의 제목·항목·표 구조를 앱이 읽어 '${styleContext.name}' 서식으로 조판했습니다(글 내용 그대로).`, ...notices], startedAt: performance.now(), session, provider: state.selectedProvider, completed: true, stale: false };
-        request = local;
-        if (ctx.rememberUser) remember({ id, provider: state.selectedProvider, role: 'user', text, at: Date.now() });
-        if (ctx.clearPrompt) prompt.value = '';
-        render();
-        await applyResponse(local, manuscriptMarkdown(manuscript), true);
-        if (request === local) request = null;
-        render();
-        return true;
-      }
+      if (!route.recompose && kordoc && styleContext && manuscriptChars > LOCAL_MANUSCRIPT_CHARS && !REWRITE_REQUEST.test(instruction))
+        return typesetLocally(manuscriptMarkdown(manuscript), `원고가 길어(${manuscriptChars.toLocaleString()}자) AI가 다시 쓰지 않고, 원고의 제목·항목·표 구조를 앱이 읽어 '${styleContext.name}' 서식으로 조판했습니다(문장은 그대로).`);
     } else if (route.kind === 'structured') {
       try {
         if (captured && !doc.isCurrent(captured)) throw new Error('선택한 본문이 바뀌었습니다. 다시 선택하세요.');
         // "방금 반영한 부분" means exactly the last applied range, never an older answer that happens to match.
-        const prepared = prepareStructuredEdit(doc, deps, text, { template, ...(route.scope ? { scope: route.scope } : {}), priorAssistantTexts: route.scope === 'recent' ? [] : history.filter(entry => entry.provider === state.selectedProvider && entry.role === 'assistant').slice(-10).map(entry => entry.text), lastAppliedRange: lastApplied?.session === session ? lastApplied : undefined });
+        const prepared = prepareStructuredEdit(doc, deps, text, { template, ...(route.scope ? { scope: route.scope } : {}), priorAssistantTexts: route.scope === 'recent' ? [] : history.filter(entry => entry.provider === provider && entry.role === 'assistant').slice(-10).map(entry => entry.text), lastAppliedRange: lastApplied?.session === session ? lastApplied : undefined });
         structured = prepared.capture; payload = prepared.prompt; notices = prepared.notices; styleContext=prepared.styleContext;
       } catch (error) {
         // Paragraph editing cannot keep tables/fields; a whole-document request goes through the template engine instead.
@@ -625,13 +684,15 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
         payload = `한글 문서의 현재 커서 위치에 넣을 새 글을 작성하세요. 설명·인사·코드블록 없이 요청한 본문만 답하세요. 요청한 줄바꿈은 유지하세요. 문서와 파일 조작은 앱이 담당합니다.\n요청: ${ask}`;
       } catch (error) { message(error instanceof Error ? error.message : '삽입할 문서 위치를 확인하세요.'); return false; }
     }
+    // A local request never reaches a model: one that turns out to need it stops here, before anything is sent.
+    if (ctx.local) { message('이 요청은 AI가 필요합니다. AI 계정을 연결한 뒤 다시 요청하세요.'); return false; }
     // Writing work may need the writer's own details: placeholders only, filled locally on apply.
     if (route.kind === 'compose' || route.kind === 'selection-edit' || route.kind === 'insert') payload += '\n' + profilePromptLine(profile);
     const model = q<HTMLSelectElement>('.achmage-model').value || undefined;
-    const selectedEffort = q<HTMLSelectElement>('.achmage-effort').value, effort = state.selectedProvider==='openai'&&selectedEffort?selectedEffort:undefined;
-    const mask = maskPersonal(payload);
-    request = { id, payload: mask.text, mask, model, effort, capture, structured, kordoc, inPlace, styleContext, notices, ...(ctx.routedMs !== undefined ? { routedMs: ctx.routedMs } : {}), startedAt: performance.now(), session, provider: state.selectedProvider, completed: false, stale: false };
-    if (ctx.rememberUser) remember({ id, provider: state.selectedProvider, role: 'user', text, at: Date.now() });
+    const selectedEffort = q<HTMLSelectElement>('.achmage-effort').value, effort = provider==='openai'&&selectedEffort?selectedEffort:undefined;
+    const mask = maskPersonal(payload, documentMask);
+    request = { id, payload: mask.text, mask, model, effort, capture, structured, kordoc, ...(documentRead && !asWrittenDocument ? { blockPatch: { blocks: documentRead.blocks } } : {}), inPlace, styleContext, notices, ...(ctx.routedMs !== undefined ? { routedMs: ctx.routedMs } : {}), startedAt: performance.now(), session, provider: provider, completed: false, stale: false };
+    if (ctx.rememberUser) remember({ id, provider: provider, role: 'user', text, at: Date.now() });
     render();
     const sent = await act({ type: 'send', prompt: mask.text, requestId: id, ...(model ? { model } : {}), ...(effort ? { reasoningEffort: effort } : {}) });
     if (sent) { if (ctx.clearPrompt) prompt.value = ''; if (mask.tokens.size) message(maskNotice(mask), 'info'); }

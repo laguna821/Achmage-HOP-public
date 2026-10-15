@@ -57,8 +57,8 @@ impl Default for GrokLimits {
         Self {
             status: Duration::from_secs(30),
             login: Duration::from_secs(600),
-            turn: Duration::from_secs(300),
-            idle: Duration::from_secs(90),
+            turn: Duration::from_secs(900),
+            idle: Duration::from_secs(120),
             cancel_grace: Duration::from_secs(3),
         }
     }
@@ -451,8 +451,7 @@ impl GrokHost {
                     s["turn"]["status"] = json!("error");
                     s["turn"]["text"] = Value::Null;
                     s["turn"]["errorCode"] = json!(code);
-                    s["turn"]["message"] =
-                        json!("응답을 완료하지 못했습니다. 자동 재전송하지 않습니다.");
+                    s["turn"]["message"] = json!(crate::turn_failure_message(code));
                 };
                 match result {
                     _ if cancelled => {

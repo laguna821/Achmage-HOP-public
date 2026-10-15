@@ -144,7 +144,7 @@ export class AiDocument {
     if(selection&&(selection.start.sectionIndex!==selection.end.sectionIndex||selection.start.paragraphIndex!==selection.end.paragraphIndex||selection.start.charOffset!==selection.end.charOffset))throw new Error('새 글을 넣을 위치를 클릭해 선택 영역을 해제하세요.');
     const identity=this.identity();if(!this.owns(identity))throw new Error('문서 상태를 확인하지 못했습니다. 다시 여세요.');
     const length=this.wasm.getParagraphLength(p.sectionIndex,p.paragraphIndex),text=length?this.wasm.getTextRange(p.sectionIndex,p.paragraphIndex,0,length):'';
-    if(length>4000||!Number.isInteger(p.charOffset)||p.charOffset<0||p.charOffset>Array.from(text).length)throw new Error('이 본문 위치는 아직 삽입을 지원하지 않습니다.');
+    if(length>200_000||!Number.isInteger(p.charOffset)||p.charOffset<0||p.charOffset>Array.from(text).length)throw new Error('이 본문 위치는 아직 삽입을 지원하지 않습니다.');
     const prefix=Array.from(text).slice(0,p.charOffset).join('');
     if(typeof Intl.Segmenter!=='function'||![...new Intl.Segmenter('ko',{granularity:'grapheme'}).segment(text)].some(s=>s.index===prefix.length)&&prefix.length!==text.length)throw new Error('결합 문자나 이모지 중간에는 삽입할 수 없습니다.');
     const controls=this.wasm.getControls();let globalParagraph=p.paragraphIndex;for(let i=0;i<p.sectionIndex;i++)globalParagraph+=this.wasm.getParagraphCount(i);
@@ -337,7 +337,7 @@ export class AiDocument {
   }
   private async applyInsertion(capture:InsertionCapture,replacement:string):Promise<void>{
     if(!replacement.trim())throw new Error('삽입할 응답이 비어 있습니다.');
-    if(replacement!==replacement.replace(/\r\n?/g,'\n')||/[\u0000-\u0008\u000b-\u001f\u007f]/.test(replacement)||Array.from(replacement).length+Array.from(capture.insertion.paragraph).length>4000)throw new Error('새 글은 줄바꿈을 포함해 4,000자 이내로 입력하세요.');
+    if(replacement!==replacement.replace(/\r\n?/g,'\n')||/[\u0000-\u0008\u000b-\u001f\u007f]/.test(replacement)||Array.from(replacement).length+Array.from(capture.insertion.paragraph).length>200_000)throw new Error('새 글은 줄바꿈을 포함해 20만 자 이내로 입력하세요.');
     const fresh=this.captureInsertion(),expected=capture.insertion;
     if(JSON.stringify(fresh.insertion)!==JSON.stringify(expected))throw new Error('삽입 위치의 원문이나 서식이 바뀌었습니다.');
     const p=expected.position,chars=Array.from(expected.paragraph),text=chars.slice(0,p.charOffset).join('')+replacement+chars.slice(p.charOffset).join('');

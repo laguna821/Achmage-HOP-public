@@ -113,7 +113,7 @@ describe('whole open-document replacement on actual pinned WASM',()=>{
  it('reads a just-replaced document again for the next restyle request (generate, then "바뀐 양식대로 전부 적용")',async()=>{
   const f=fixture(()=>{});
   try{await f.doc.applyWholeDocument(f.doc.identity(),new Uint8Array(generated),{hideFirstPage:true});
-   const got=captureWholeDocumentContext(f.wasm);expect(got.tables).toBe(4);expect(JSON.parse(got.source).sections[0].paragraphs).toHaveLength(20);}finally{f.close();}
+   const got=captureWholeDocumentContext(f.wasm);expect(got.tables).toBe(4);expect(got.sections[0].paragraphs).toHaveLength(20);}finally{f.close();}
  });
  it('does not hide the first page number when the template has no cover',async()=>{
   const f=fixture(()=>{});

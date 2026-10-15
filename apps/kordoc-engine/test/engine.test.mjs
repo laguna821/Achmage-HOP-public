@@ -24,8 +24,8 @@ test('false role bold overrides preset bold while explicit Markdown strong remai
 });
 test('generated packages are deterministic and mimetype remains first and stored',async()=>{const a=await generateDocument(template(),markdown),b=await generateDocument(template(),markdown);assert.equal(a.hwpxBase64,b.hwpxBase64);const data=Buffer.from(a.hwpxBase64,'base64');assert.equal(data.readUInt16LE(8),0);assert.equal(data.subarray(30,38).toString(),'mimetype');});
 test('TOC emits plain heading text and supports blank cells',async()=>{const r=await generateDocument(template(),'# 제목\n\n## **중요** 내용\n\n본문\n\n| 이름 | 값 |\n| --- | --- |\n| a | |');const z=await JSZip.loadAsync(Buffer.from(r.hwpxBase64,'base64')),s=await z.file('Contents/section0.xml').async('string');assert.ok(s.includes('중요 내용'));assert.ok(!s.includes('**'));assert.ok(s.includes('<hp:tbl'));});
-test('soft-wrapped source paragraphs retain selected style and missing cover title is explicit',async()=>{const r=await generateDocument(template(),'# 제목\n\n## 소제목\n\n첫 번째 줄\n이어지는 줄');assert.ok(r.validation.ok);await assert.rejects(generateDocument(template(),'본문만 있습니다.'),/# 제목/);});
-test('traversal and overexpanded packages fail before rendering',async()=>{const z=new JSZip();z.file('../bad','x');await assert.rejects(renderBytes(Buffer.from(await z.generateAsync({type:'uint8array'}))),/경로/);const over=new JSZip();over.file('large','x'.repeat(33*1024*1024));await assert.rejects(renderBytes(Buffer.from(await over.generateAsync({type:'uint8array',compression:'DEFLATE'}))),/해제/);});
+test('soft-wrapped source paragraphs retain selected style and missing cover title is explicit',async()=>{const r=await generateDocument(template(),'# 제목\n\n## 소제목\n\n첫 번째 줄\n이어지는 줄');assert.ok(r.validation.ok);await assert.rejects(generateDocument(template(),'본문만 있습니다.'),/맨 앞에 제목/);});
+test('traversal and overexpanded packages fail before rendering',async()=>{const z=new JSZip();z.file('../bad','x');await assert.rejects(renderBytes(Buffer.from(await z.generateAsync({type:'uint8array'}))),/경로/);const over=new JSZip();over.file('large','x'.repeat(33*1024*1024));await assert.rejects(renderBytes(Buffer.from(await over.generateAsync({type:'uint8array',compression:'DEFLATE'}))),/압축을 풀면/);});
 function worker(frames){return new Promise((resolve,reject)=>{const p=spawn(process.execPath,['worker.mjs'],{cwd:new URL('..',import.meta.url),stdio:['pipe','pipe','pipe']});let out='',err='';p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);p.on('error',reject);p.on('close',code=>resolve({code,err,replies:out.trim().split('\n').filter(Boolean).map(s=>JSON.parse(s))}));for(const frame of frames)p.stdin.write(frame);p.stdin.end();});}
 test('stdio split frames, bad JSON and duplicate keys recover with bounded responses',async()=>{const r=await worker(['{"id":"a","op":','"capabilities"}\n','bad\n','{"id":"b","op":"capabilities","op":"generate"}\n','{"id":"c","op":"capabilities"}\n']);assert.equal(r.code,0);assert.equal(r.err,'');assert.deepEqual(r.replies.map(x=>x.ok),[true,false,false,true]);assert.equal(r.replies[3].id,'c');});
 test('stdio reports an incomplete final frame after a successful request',async()=>{const r=await worker(['{"id":"a","op":"capabilities"}\n','{"id":"b"']);assert.equal(r.replies.length,2);assert.equal(r.replies[1].error.code,'incomplete_frame');});
@@ -54,5 +54,31 @@ test('more than 1,024 blocks and 100 pages: generated in full, previews stop at 
  const t=template();t.layout.cover=false;t.layout.toc=false;
  const text='# 긴 문서\n\n'+Array.from({length:1500},(_,i)=>`${i+1}번째 문단입니다. `+'긴 본문 문장을 그대로 둡니다. '.repeat(6)).join('\n\n');
  const r=await generateDocument(t,text);assert.ok(r.validation.ok);assert.ok(r.pageCount>100,String(r.pageCount));assert.equal(r.pages.length,100);
- const section=await (await JSZip.loadAsync(Buffer.from(r.hwpxBase64,'base64'))).file('Contents/section0.xml').async('string');assert.ok(section.includes('1500번째 문단입니다.'));assert.ok(!/[-]/u.test(section));
+ const section=await (await JSZip.loadAsync(Buffer.from(r.hwpxBase64,'base64'))).file('Contents/section0.xml').async('string');assert.ok(section.includes('1500번째 문단입니다.'));assert.ok(!/[\uE000-\uF8FF]/u.test(section));
+});
+
+test('a document read as written: escaped text stays literal and 40 tables of 30x9 cells (10,800 role blocks, past the old 3,840) generate',async()=>{
+ const t=template();t.layout.cover=false;t.layout.toc=false;
+ const cell=(i,r,c)=>i===0&&r===1&&c===0?'A\\|B':`${i}-${r}-${c}`;
+ const table=i=>Array.from({length:30},(_,r)=>`| ${Array.from({length:9},(_,c)=>cell(i,r,c)).join(' | ')} |`+(r===0?'\n|'+' --- |'.repeat(9):'')).join('\n');
+ const literal=['2024\\. 10. 15. 회의','연구&개발 \\<초안\\> \\*별표\\* \\_밑줄\\_','\\#해시태그 문단','A\\|B 비교 문단','\\~\\~취소\\~\\~ 표시와 \\[대괄호\\](주소)'];
+ const text=['# 긴 문서',...literal,...Array.from({length:40},(_,i)=>`${i+1}번째 표 앞 문단입니다.\n\n${table(i)}`)].join('\n\n')+'\n';
+ const r=await generateDocument(t,text);assert.ok(r.validation.ok);
+ const section=await (await JSZip.loadAsync(Buffer.from(r.hwpxBase64,'base64'))).file('Contents/section0.xml').async('string');
+ const texts=[...section.replace(/<hp:nbSpace\/>/g,' ').matchAll(/<hp:t>([^<]*)<\/hp:t>/g)].map(m=>m[1].replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&'));
+ for(const want of ['2024. 10. 15. 회의','연구&개발 <초안> *별표* _밑줄_','#해시태그 문단','A|B 비교 문단','~~취소~~ 표시와 [대괄호](주소)','A|B','39-29-8'])assert.ok(texts.includes(want),want);
+ // The report preset draws the title in a box, which is a table too.
+ assert.equal((section.match(/<hp:tbl\b/g)??[]).length,41);assert.ok(!/[\uE000-\uF8FF]/u.test(section));
+});
+test('every sentence the engine shows the user is a fixed literal the app will pass on',async()=>{
+ const {readFile}=await import('node:fs/promises');const src=await readFile(new URL('../engine.mjs',import.meta.url),'utf8');
+ const calls=[...src.matchAll(/\brefuse\(/g)].map(m=>src.slice(m.index,m.index+300));assert.ok(calls.length>=20,String(calls.length));
+ for(const call of calls){const m=/^refuse\('([^'\\]*)'\)/.exec(call);assert.ok(m,call.slice(0,80));assert.ok(!/[\/\\<\n]/.test(m[1])&&[...m[1]].length<=200,m[1]);}
+});
+test('a refusal by the engine own rules is marked engine_rule, so the app can say why; other failures are not',async()=>{
+ const noTitle=JSON.stringify({id:'rule',op:'generate',template:template(),markdown:'본문만 있습니다.'})+'\n';
+ // A malformed request fails in the JSON parser, not by an engine rule: its message is never shown.
+ const r=await worker([noTitle,'not json\n']);
+ assert.equal(r.replies[0].error.code,'engine_rule');assert.equal(r.replies[0].error.message,'표지를 만들려면 문서 맨 앞에 제목이 필요합니다.');
+ assert.notEqual(r.replies[1].error.code,'engine_rule');
 });

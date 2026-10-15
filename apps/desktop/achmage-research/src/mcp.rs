@@ -1,4 +1,5 @@
-//! Explicit Streamable HTTP MCP client. No automatic tool selection or execution.
+//! Streamable HTTP MCP client. Calls are started by the user: a tool chosen in the settings card, or a search
+//! box query that mcp_search.rs sends to the server's search tool by a fixed rule. Never chosen by a model.
 use crate::http::{Http, MAX_BODY};
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -76,7 +77,7 @@ impl McpSession {
         )
         .await
     }
-    /// Caller must present exact tool+arguments to user. The result is untrusted source content.
+    /// The caller shows which tool was called with what; the result is untrusted source content.
     pub async fn call_tool(
         &mut self,
         name: &str,

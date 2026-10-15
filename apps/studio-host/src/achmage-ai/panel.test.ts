@@ -57,7 +57,7 @@ beforeEach(()=>{vi.useFakeTimers();dom=new TestDocument();state=base();documentG
 afterEach(()=>{stop?.();vi.useRealTimers();vi.unstubAllGlobals();});
 async function start(pageCount=1,options:PanelOptions={router:false,restoreSignIn:false},input?:unknown){const wasm={pageCount};stop=installAiPanel({wasm,input,eventBus:{on:()=>()=>{}},undo:vi.fn()} as unknown as PanelDeps,{state:async()=>state,action},options);await flush();return wasm;}
 describe('actual AI panel handlers',()=>{
-  beforeEach(()=>{templateGuard.current=undefined;kordocGuard.prepare.mockReset().mockResolvedValue(['함초롬바탕']);kordocGuard.create.mockReset().mockResolvedValue({pages:3,warnings:[]});wholeGuard.capture.mockReset().mockReturnValue({source:JSON.stringify({paragraphs:[{text:'열린 문서의 고유 본문'}],tables:[{cells:['안건','검토']}]}),paragraphs:1,tables:1});});
+  beforeEach(()=>{templateGuard.current=undefined;kordocGuard.prepare.mockReset().mockResolvedValue(['함초롬바탕']);kordocGuard.create.mockReset().mockResolvedValue({pages:3,warnings:[]});wholeGuard.capture.mockReset().mockReturnValue({sections:[{index:0,paragraphs:[{index:0,text:'열린 문서의 고유 본문',tables:[]},{index:1,text:'',tables:[{controlIndex:0,charOffset:0,rowCount:1,colCount:2,cells:[{index:0,row:0,col:0,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'안건'}]},{index:1,row:0,col:1,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'검토'}]}]}]}]}],paragraphs:4,tables:1,chars:15});});
   it('sends long Korean requests intact through routing and document authoring',async()=>{
     templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);
     await start(0,{});
@@ -85,16 +85,72 @@ describe('actual AI panel handlers',()=>{
     expect(kordocGuard.create).toHaveBeenCalledTimes(1);
     const markdown=kordocGuard.create.mock.calls[0][0] as string;
     expect(markdown.startsWith('# 2026년 사업 추진 보고')).toBe(true);expect(markdown).toContain('## 추진 배경');expect(markdown).toContain('문단 400.');
-    expect(q('.achmage-message').textContent).toContain('글 내용 그대로');
+    expect(q('.achmage-message').textContent).toContain('문장은 그대로');
   });
-  it.each(['양식을 바꿨는데 바뀐 양식대로 표지 목차 등이 전부 적용될 수 있게 만들어봐','양식을 바꿨는데 바뀐 양식대로 표지 목차 등이 전부 적용될 수 있게 만들어봐. 현재 한글에 작성한 문서 내용 전체 기준으로'])('reads the currently open whole document for the reported restyling request: %s',async instruction=>{
+  it.each(['양식을 바꿨는데 바뀐 양식대로 표지 목차 등이 전부 적용될 수 있게 만들어봐','양식을 바꿨는데 바뀐 양식대로 표지 목차 등이 전부 적용될 수 있게 만들어봐. 현재 한글에 작성한 문서 내용 전체 기준으로'])('typesets the currently open whole document for the reported restyling request without any model call: %s',async instruction=>{
     templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);await start();
     q('.achmage-prompt').value=instruction;
     q('.achmage-prompt').dispatchEvent(event('input'));
+    await btn('send').click();await flush();
+    expect(wholeGuard.capture).toHaveBeenCalledTimes(1);expect(action.mock.calls.some(call=>call[1].type==='send')).toBe(false);
+    expect(kordocGuard.create).toHaveBeenCalledTimes(1);const markdown=kordocGuard.create.mock.calls[0][0] as string;expect(markdown).toContain('열린 문서의 고유 본문');expect(markdown).toContain('| 안건 | 검토 |');
+    expect(q('.achmage-message').textContent).toContain('AI가 글을 다시 쓰지 않고');expect(documentGuard.applyStructured).not.toHaveBeenCalled();
+  });
+  it('asks the model only for the changed blocks when the restyling request also changes the content, and keeps the rest as read',async()=>{
+    templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);await start();
+    q('.achmage-prompt').value='현재 문서 전체를 이 서식으로 바꾸면서 제목을 더 짧게 고쳐줘';q('.achmage-prompt').dispatchEvent(event('input'));
     await btn('send').click();await flush();const sent=sentRequest();
-    expect(wholeGuard.capture).toHaveBeenCalledTimes(1);expect(sent.prompt).toContain('열린 문서의 고유 본문');expect(sent.prompt).toContain('안건');expect(sent.prompt).toContain('다시 복사해서 보내 달라고 요청하지');expect(sent.prompt).toContain('"cover":true');expect(sent.prompt).toContain('"toc":true');
-    state={...state,generation:3,turn:{id:sent.requestId,requestId:sent.requestId,status:'completed',text:'# 고유 본문\n\n## 안건\n검토'}};await vi.advanceTimersByTimeAsync(1500);
-    expect(kordocGuard.create).toHaveBeenCalledTimes(1);expect(documentGuard.applyStructured).not.toHaveBeenCalled();
+    expect(sent.prompt).toContain('[B1]');expect(sent.prompt).toContain('"kind":"block_patch"');expect(sent.prompt).toContain('| 안건 | 검토 |');expect(sent.prompt).toContain('"cover":true');
+    state={...state,generation:3,turn:{id:sent.requestId,requestId:sent.requestId,status:'completed',text:'{"schemaVersion":1,"kind":"block_patch","changes":[{"replace":"B1","markdown":"# 고유 본문"}]}'}};await vi.advanceTimersByTimeAsync(1500);
+    expect(kordocGuard.create).toHaveBeenCalledTimes(1);const markdown=kordocGuard.create.mock.calls[0][0] as string;expect(markdown).toContain('# 고유 본문');expect(markdown).not.toContain('열린 문서의 고유 본문');expect(markdown).toContain('| 안건 | 검토 |');
+    expect(q('.achmage-message').textContent).toContain('나머지 블록은 원문 그대로');
+  });
+  it('masks personal identifiers in the document blocks before Markdown escaping can hide them from the detector',async()=>{
+    // Escaping first turned "031)000-0000" into "031\\)000-0000", which no detector read as a phone number.
+    templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);wholeGuard.capture.mockReturnValue({sections:[{index:0,paragraphs:[{index:0,text:'담당 hong_gildong@example.com',tables:[]},{index:1,text:'',tables:[{controlIndex:0,charOffset:0,rowCount:1,colCount:2,cells:[{index:0,row:0,col:0,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'031)000-0000'}]},{index:1,row:0,col:1,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'010.0000.0000'}]}]}]}]}],paragraphs:4,tables:1,chars:50});await start();
+    q('.achmage-prompt').value='현재 문서 전체를 이 서식으로 바꾸면서 문장을 다듬어줘';q('.achmage-prompt').dispatchEvent(event('input'));
+    await btn('send').click();await flush();const sent=sentRequest();
+    for(const leak of ['000-0000','0000.0000','gildong','example.com'])expect(sent.prompt).not.toContain(leak);
+    expect(sent.prompt).toContain('〔개인정보');
+    state={...state,generation:3,turn:{id:sent.requestId,requestId:sent.requestId,status:'completed',text:JSON.stringify({schemaVersion:1,kind:'block_patch',changes:[{replace:'B1',markdown:'# 담당자 안내'}]})}};await vi.advanceTimersByTimeAsync(1500);
+    // Unchanged blocks are rebuilt from the local original, values included; no "missing personal data" notice.
+    const markdown=kordocGuard.create.mock.calls[0][0] as string;expect(markdown).toContain('# 담당자 안내');expect(markdown).toContain('031\\)000-0000');expect(markdown).toContain('010\\.0000.0000');
+    expect(q('.achmage-message').textContent).not.toContain('빠졌습니다');
+  });
+  it('applies nothing when a changed block still carries a masking token after JSON decoding',async()=>{
+    templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);await start();
+    q('.achmage-prompt').value='현재 문서 전체를 이 서식으로 바꾸면서 문장을 다듬어줘';q('.achmage-prompt').dispatchEvent(event('input'));
+    await btn('send').click();await flush();const sent=sentRequest();
+    state={...state,generation:3,turn:{id:sent.requestId,requestId:sent.requestId,status:'completed',text:'{"schemaVersion":1,"kind":"block_patch","changes":[{"replace":"B1","markdown":"\\u3014개인정보7\\u3015 안내"}]}'}};await vi.advanceTimersByTimeAsync(1500);
+    expect(kordocGuard.create).not.toHaveBeenCalled();expect(q('.achmage-message').textContent).toContain('개인정보 표시');
+  });
+  it('typesets "문서 전체를 이 서식으로" with no AI sign-in and no routing turn',async()=>{
+    templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);state={...base(),auth:{status:'signed_out',sessionGeneration:null}} as AiState;await start(1,{});
+    q('.achmage-prompt').value='현재 문서 전체를 선택한 서식으로 바꿔줘';q('.achmage-prompt').dispatchEvent(event('input'));await btn('send').click();await flush();
+    expect(action.mock.calls.some(call=>call[1].type==='send')).toBe(false);expect(kordocGuard.create).toHaveBeenCalledTimes(1);
+    expect(q('.achmage-message').textContent).toContain('AI가 글을 다시 쓰지 않고');expect(q('.achmage-message').textContent).toContain('조판·적용');expect(q('.achmage-message').textContent).not.toMatch(/AI [0-9.]+초/);
+    // Anything that needs a model still asks for a sign-in first.
+    kordocGuard.create.mockClear();q('.achmage-prompt').value='현재 문서 전체를 이 서식으로 바꾸면서 요약해줘';q('.achmage-prompt').dispatchEvent(event('input'));await btn('send').click();await flush();
+    expect(kordocGuard.create).not.toHaveBeenCalled();expect(q('.achmage-message').textContent).toContain('먼저 AI 계정을 연결하세요');
+  });
+  it.each(['영어로 바꿔줘','더 공손하게 바꿔줘','띄어쓰기 맞춰줘','문장을 매끄럽게 해줘'])('sends a Ctrl+A whole-document edit that changes the wording to the model, never a silent restyle: %s',async instruction=>{
+    templateGuard.current=undefined;await start();
+    dom.dispatchEvent(event('achmage:request-whole-edit',{detail:{instruction}}));await flush();
+    const sent=sentRequest();expect(sent.prompt).toContain('"kind":"block_patch"');expect(sent.prompt).toContain(instruction);expect(kordocGuard.create).not.toHaveBeenCalled();
+  });
+  it('keeps a translation asked together with a template change for the model, and a Ctrl+A "서식만" for the app',async()=>{
+    templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);state={...base(),auth:{status:'signed_out',sessionGeneration:null}} as AiState;await start(1,{});
+    q('.achmage-prompt').value='현재 문서 전체를 이 서식으로 바꾸고 영어로 바꿔줘';q('.achmage-prompt').dispatchEvent(event('input'));await btn('send').click();await flush();
+    expect(kordocGuard.create).not.toHaveBeenCalled();expect(q('.achmage-message').textContent).toContain('먼저 AI 계정을 연결하세요');
+    templateGuard.current=undefined;dom.dispatchEvent(event('achmage:request-whole-edit',{detail:{instruction:'내용은 그대로 두고 서식만 정돈해줘'}}));await flush();
+    expect(action.mock.calls.some(call=>call[1].type==='send')).toBe(false);expect(kordocGuard.create).toHaveBeenCalledTimes(1);
+  });
+  it('applies nothing when the model answers a changed-blocks request with something else',async()=>{
+    templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);await start();
+    q('.achmage-prompt').value='현재 문서 전체를 이 서식으로 바꾸면서 문장을 다듬어줘';q('.achmage-prompt').dispatchEvent(event('input'));
+    await btn('send').click();await flush();const sent=sentRequest();
+    state={...state,generation:3,turn:{id:sent.requestId,requestId:sent.requestId,status:'completed',text:'# 요약본'}};await vi.advanceTimersByTimeAsync(1500);
+    expect(kordocGuard.create).not.toHaveBeenCalled();expect(documentGuard.applyWhole).not.toHaveBeenCalled();expect(q('.achmage-message').textContent).toContain('적용하지 않았습니다');
   });
   it('does not ask a provider to reconstruct a source that cannot be read losslessly',async()=>{
     templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);wholeGuard.capture.mockImplementation(()=>{throw Error('그림 보존을 확인하지 못했습니다');});await start();
@@ -126,11 +182,18 @@ describe('actual AI panel handlers',()=>{
     expect(action).not.toHaveBeenCalled();expect(kordocGuard.prepare).not.toHaveBeenCalled();expect(kordocGuard.create).not.toHaveBeenCalled();expect(documentGuard.applyWhole).not.toHaveBeenCalled();
     expect(q('.achmage-message').textContent).toContain('빈 양식 채우기 전용');expect(q('.achmage-message').textContent).toContain('빈 양식 열기');
   });
-  it('applies the reported restyling request to the open window as one Ctrl+Z step and discloses replaced layout',async()=>{
+  it('typesets without a contents page, and says so, when the document has no chapter headings',async()=>{
     templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);await start();
+    kordocGuard.create.mockImplementation(async(_t,_tmp,_c,inPlace)=>{await inPlace(new Uint8Array([7]));return {placement:'current',pages:1,warnings:[]};});
+    q('.achmage-prompt').value='현재 문서 전체를 선택한 서식으로 바꿔줘';q('.achmage-prompt').dispatchEvent(event('input'));await btn('send').click();await flush();
+    expect(kordocGuard.create.mock.calls[0][1].layout).toMatchObject({cover:true,toc:false});expect(documentGuard.applyWhole.mock.calls[0][2]).toEqual({hideFirstPage:true,toc:false});
+    expect(q('.achmage-message').textContent).toContain('장 제목을 찾지 못해 목차 없이 조판했습니다');
+  });
+  it('applies the reported restyling request to the open window as one Ctrl+Z step and discloses replaced layout',async()=>{
+    templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);wholeGuard.capture.mockReturnValue({sections:[{index:0,paragraphs:[{index:0,text:'사업 결과 보고',tables:[]},{index:1,text:'Ⅰ. 추진 배경',tables:[]},{index:2,text:'본문 문장입니다.',tables:[]}]}],paragraphs:3,tables:0,chars:20});await start();
     kordocGuard.create.mockImplementation(async(_t,_tmp,current,inPlace)=>{expect(current()).toBe(true);const notices=await inPlace(new Uint8Array([7]));return {placement:'current',pages:3,warnings:notices};});
-    q('.achmage-prompt').value='양식을 바꿨는데 바뀐 양식대로 표지 목차 등이 전부 적용될수 있게 만들어봐';q('.achmage-prompt').dispatchEvent(event('input'));await btn('send').click();await flush();const sent=sentRequest();
-    state={...state,generation:3,turn:{id:sent.requestId,requestId:sent.requestId,status:'completed',text:'# 고유 본문\n\n## 안건\n검토'}};await vi.advanceTimersByTimeAsync(1500);
+    q('.achmage-prompt').value='양식을 바꿨는데 바뀐 양식대로 표지 목차 등이 전부 적용될수 있게 만들어봐';q('.achmage-prompt').dispatchEvent(event('input'));await btn('send').click();await flush();
+    expect(action.mock.calls.some(call=>call[1].type==='send')).toBe(false);
     expect(documentGuard.applyWhole).toHaveBeenCalledTimes(1);expect(documentGuard.applyWhole.mock.calls[0][0]).toEqual({current:true});expect(documentGuard.applyWhole.mock.calls[0][1]).toEqual(new Uint8Array([7]));expect(documentGuard.applyWhole.mock.calls[0][2]).toEqual({hideFirstPage:true,toc:true});
     expect(q('.achmage-message').textContent).toContain('현재 문서를');expect(q('.achmage-message').textContent).toContain('Ctrl+Z');expect(q('.achmage-message').textContent).toContain('꼬리말');
   });
@@ -143,16 +206,15 @@ describe('actual AI panel handlers',()=>{
   });
   it('explains an in-place limit when the result had to open in a new window',async()=>{
     templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);kordocGuard.create.mockResolvedValue({placement:'new-window',pages:3,warnings:[],fallbackReason:'여러 구역으로 나뉜 문서는 현재 창에서 통째로 바꾸지 않습니다.'});await start();
-    q('.achmage-prompt').value='현재 문서 전체를 선택한 서식으로 다시 만들어줘';q('.achmage-prompt').dispatchEvent(event('input'));await btn('send').click();await flush();const sent=sentRequest();
-    state={...state,generation:3,turn:{id:sent.requestId,requestId:sent.requestId,status:'completed',text:'# 본문'}};await vi.advanceTimersByTimeAsync(1500);
+    q('.achmage-prompt').value='현재 문서 전체를 선택한 서식으로 다시 만들어줘';q('.achmage-prompt').dispatchEvent(event('input'));await btn('send').click();await flush();
     expect(q('.achmage-message').textContent).toContain('여러 구역');expect(q('.achmage-message').textContent).toContain('새 창');
   });  it('routes an inline whole-document edit (Ctrl+A with tables) to in-place restyling, with the default template when none is chosen',async()=>{
     templateGuard.current=undefined;await start();
     dom.dispatchEvent(event('achmage:request-whole-edit',{detail:{instruction:'더 간결하게 공문 어투로 바꿔줘'}}));await flush();
     const sent=sentRequest();expect(wholeGuard.capture).toHaveBeenCalledTimes(1);expect(sent.prompt).toContain('kordoc');expect(sent.prompt).toContain('더 간결하게 공문 어투로');expect(sent.prompt).toContain('열린 문서의 고유 본문');
     kordocGuard.create.mockImplementation(async(_t,template,_c,inPlace)=>{expect(template.name).toBe(BUILTIN_DOCUMENT_TEMPLATES[0].name);await inPlace(new Uint8Array([1]));return {placement:'current',pages:2,warnings:[]};});
-    state={...state,generation:3,turn:{id:sent.requestId,requestId:sent.requestId,status:'completed',text:'# 고유 본문'}};await vi.advanceTimersByTimeAsync(1500);
-    expect(documentGuard.applyWhole).toHaveBeenCalledTimes(1);expect(q('.achmage-message').textContent).toContain('현재 문서를');
+    state={...state,generation:3,turn:{id:sent.requestId,requestId:sent.requestId,status:'completed',text:'{"schemaVersion":1,"kind":"block_patch","changes":[{"replace":"B1","markdown":"# 고유 본문"}]}'}};await vi.advanceTimersByTimeAsync(1500);
+    expect(documentGuard.applyWhole).toHaveBeenCalledTimes(1);expect(q('.achmage-message').textContent).toContain('현재 문서를');expect(kordocGuard.create.mock.calls[0][0]).toContain('| 안건 | 검토 |');
   });  it('does not spend a provider request when the document engine cannot start',async()=>{
     templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);kordocGuard.prepare.mockRejectedValue(Error('엔진 설치 실패'));await start();q('.achmage-prompt').value='선택한 서식으로 회의자료를 만들어보자';q('.achmage-prompt').dispatchEvent(event('input'));await btn('send').click();await flush();expect(action).not.toHaveBeenCalled();expect(q('.achmage-message').textContent).toContain('엔진 설치 실패');
   });
@@ -288,7 +350,7 @@ describe('model-routed chat messages',()=>{
   const complete=async(requestId:string,text:string)=>{state={...state,generation:state.generation+5,turn:{id:requestId,requestId,status:'completed',text}};await vi.advanceTimersByTimeAsync(1500);};
   const ask=async(text:string)=>{q('.achmage-prompt').value=text;q('.achmage-prompt').dispatchEvent(event('input'));await btn('send').click();await flush();};
   const chat=()=>panel().querySelector('.achmage-history')!.children.map(e=>e.children[1]?.textContent);
-  beforeEach(()=>{templateGuard.current=undefined;kordocGuard.prepare.mockReset().mockResolvedValue(['함초롬바탕']);kordocGuard.create.mockReset().mockResolvedValue({pages:3,warnings:[]});wholeGuard.capture.mockReset().mockReturnValue({source:JSON.stringify({paragraphs:[{text:'열린 문서의 고유 본문'}]}),paragraphs:1,tables:1});});
+  beforeEach(()=>{templateGuard.current=undefined;kordocGuard.prepare.mockReset().mockResolvedValue(['함초롬바탕']);kordocGuard.create.mockReset().mockResolvedValue({pages:3,warnings:[]});wholeGuard.capture.mockReset().mockReturnValue({sections:[{index:0,paragraphs:[{index:0,text:'열린 문서의 고유 본문',tables:[]},{index:1,text:'',tables:[{controlIndex:0,charOffset:0,rowCount:1,colCount:2,cells:[{index:0,row:0,col:0,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'안건'}]},{index:1,row:0,col:1,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'검토'}]}]}]}]}],paragraphs:4,tables:1,chars:15});});
   it('lets the model choose whole-document recomposition for the reported free-form request, then runs the template engine',async()=>{
     templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[2]);await start(1,{});
     const reported='지금 바꾼 서식에 맞춰서 제목이랑 목차 등등 다 생기게 몇장짜리로 표랑 섞어서 문서 전체를 다시써서 길게 뻥튀기해줘';
@@ -298,8 +360,8 @@ describe('model-routed chat messages',()=>{
     await complete(router.requestId,'{"action":"recompose_document","instruction":"현재 문서 전체를 한림대 일송 서식으로 제목·목차·표를 넣어 길게 다시 써줘"}');
     expect(sends()).toBe(2);const work=sentAt(1);expect(wholeGuard.capture).toHaveBeenCalledTimes(1);expect(work.prompt).toContain('열린 문서의 고유 본문');expect(work.prompt).toContain('요청 해석');
     expect(chat()).toContain(reported);expect(chat().some(t=>t?.includes('다시 구성합니다'))).toBe(true);expect(chat().some(t=>t?.includes('"action"'))).toBe(false);
-    await complete(work.requestId,'# 정렬 시험 문서\n\n## 첫째 장\n본문');
-    expect(kordocGuard.create).toHaveBeenCalledTimes(1);expect(documentGuard.applyStructured).not.toHaveBeenCalled();
+    await complete(work.requestId,'{"schemaVersion":1,"kind":"block_patch","changes":[{"replace":"B1-B2","markdown":"# 정렬 시험 문서\\n\\n## 첫째 장\\n\\n본문"}]}');
+    expect(kordocGuard.create).toHaveBeenCalledTimes(1);expect(kordocGuard.create.mock.calls[0][0]).toContain('## 첫째 장');expect(documentGuard.applyStructured).not.toHaveBeenCalled();
   });
   it('answers questions in one turn without touching the document and sends recent conversation as context',async()=>{
     await start(1,{});await ask('이 문서의 핵심이 뭐야?');const first=sentAt(0);
@@ -328,7 +390,7 @@ describe('model-routed chat messages',()=>{
     expect(chat().some(t=>t?.startsWith('요청을 끝내지 못했습니다. 응답 시간이 초과되었습니다.'))).toBe(true);expect(kordocGuard.create).not.toHaveBeenCalled();
     const box=panel().querySelector('.achmage-clarify')!;expect(box.children.map(b=>b.textContent)).toEqual(['다시 시도']);
     await box.children[0].click();await flush();expect(sends()).toBe(3);expect(sentAt(2).prompt).toBe(work.prompt);expect(sentAt(2).requestId).not.toBe(work.requestId);
-    await complete(sentAt(2).requestId,'# 정렬 시험 문서\n\n## 첫째 장\n본문');expect(kordocGuard.create).toHaveBeenCalledTimes(1);expect(box.hidden).toBe(true);
+    await complete(sentAt(2).requestId,'{"schemaVersion":1,"kind":"block_patch","changes":[{"replace":"B1-B2","markdown":"# 정렬 시험 문서\\n\\n## 첫째 장\\n\\n본문"}]}');expect(kordocGuard.create).toHaveBeenCalledTimes(1);expect(box.hidden).toBe(true);
   });
   it('never sends personal identifiers and restores them before the chat or the document sees the reply',async()=>{
     await start(1,{});await ask('담당 연락처 010-1234-5678 넣어서 안내문 써줘');const router=sentAt(0);

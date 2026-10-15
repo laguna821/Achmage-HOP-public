@@ -4,6 +4,7 @@ pub mod http;
 pub mod mcp;
 pub mod mcp_jobs;
 pub mod mcp_legacy;
+pub mod mcp_search;
 pub mod mcp_stdio;
 pub mod normalize;
 mod normalize_xml;
@@ -96,26 +97,34 @@ impl ResearchService {
             let id = source["id"].as_str().unwrap().to_string();
             let mut missing = Vec::new();
             let mut store_error = false;
+            // Whether each key is stored (never its value), so the settings can say "저장됨".
+            let mut stored = serde_json::Map::new();
             if let Some(fields) = source["secretFields"].as_array() {
                 for f in fields {
                     let field = f["id"].as_str().unwrap();
-                    if id == "openalex" {
-                        continue;
-                    }
-                    if f["required"] == true {
-                        match self.secrets.get(&id, field) {
-                            Ok(Some(_)) => {}
-                            Ok(None) => missing.push(field.to_string()),
-                            Err(_) => store_error = true,
+                    let required = key_required(&id, f);
+                    let present = match self.secrets.get(&id, field) {
+                        Ok(value) => value.is_some(),
+                        // An optional key that cannot be read leaves the source usable without it.
+                        Err(_) => {
+                            store_error |= required;
+                            false
                         }
+                    };
+                    stored.insert(field.into(), present.into());
+                    if required && !present {
+                        missing.push(field.to_string());
                     }
                 }
             }
+            let preset = source["mcpPreset"]["url"].as_str().map(str::to_owned);
+            let turned_on = state.settings.get(&id).is_some_and(|s| s.turned_on());
             let stdio = state
                 .settings
                 .get(&id)
                 .is_some_and(|s| s.options.get("transport").is_some_and(|t| t == "stdio"));
             if !stdio
+                && preset.is_none()
                 && (matches!(id.as_str(), "scienceon" | "ntis") || source["protocol"] == "mcp")
                 && !state
                     .settings
@@ -124,8 +133,11 @@ impl ResearchService {
             {
                 missing.push("endpoint".into());
             }
-            source["runtimeStatus"] = serde_json::json!(if source["protocol"] == "mcp" {
+            source["runtimeStatus"] = serde_json::json!(if id == "custom-mcp" {
                 "mcp_explicit"
+            } else if preset.is_some() && !turned_on {
+                // A third-party server receives keys and search terms only after the user turns it on.
+                "off"
             } else if store_error {
                 "credential_store_unavailable"
             } else if !missing.is_empty() {
@@ -134,8 +146,18 @@ impl ResearchService {
                 "ready"
             });
             source["missingFields"] = serde_json::json!(missing);
-            if source["protocol"] == "mcp" && id != "custom-mcp" {
-                source["optionFields"] = serde_json::json!([{ "id":"endpoint", "label":"MCP endpoint (명시 저장 후 연결)", "required":true }]);
+            if let Some(url) = &preset {
+                // The registered address is used as is; nothing to type.
+                source["optionFields"] = serde_json::json!([]);
+                source["effectiveEndpoint"] = serde_json::json!(state
+                    .settings
+                    .get(&id)
+                    .and_then(|s| s.options.get("endpoint"))
+                    .unwrap_or(url));
+            }
+            source["storedSecrets"] = serde_json::Value::Object(stored);
+            if id == "korean-law" {
+                source["issueUrl"] = serde_json::json!("https://open.law.go.kr/");
             }
             source["settings"] =
                 serde_json::json!(state.settings.get(&id).cloned().unwrap_or_default());
@@ -212,6 +234,16 @@ impl ResearchService {
             .get(&request.source_id)
             .cloned()
             .unwrap_or_default();
+        // A turned-on MCP server answers through its own search tool; the custom connection stays tool-by-tool.
+        let def = definition(&request.source_id)?;
+        let mcp = if def["protocol"] == "mcp" {
+            if request.source_id == "custom-mcp" {
+                return Err("사용자 MCP 연결은 연결 설정의 도구 직접 실행으로 씁니다.".into());
+            }
+            Some(self.mcp_target(&request.source_id, &def, s.settings.get(&request.source_id))?)
+        } else {
+            None
+        };
         let cache_key = format!(
             "{:x}",
             Sha256::digest(serde_json::to_vec(&(generation, &request)).unwrap())
@@ -243,7 +275,6 @@ impl ResearchService {
         let job = id.clone();
         tokio::spawn(async move {
             let mut keys = BTreeMap::new();
-            let def = definition(&request.source_id).unwrap();
             let mut error = None;
             for f in def["secretFields"].as_array().unwrap() {
                 let k = f["id"].as_str().unwrap();
@@ -252,6 +283,8 @@ impl ResearchService {
                         keys.insert(k.into(), v);
                     }
                     Ok(None) => {}
+                    // As in the catalog: an optional key that cannot be read leaves the search running without it.
+                    Err(_) if !key_required(&request.source_id, f) => {}
                     Err(e) => {
                         error = Some(e);
                         break;
@@ -260,6 +293,8 @@ impl ResearchService {
             }
             let result = if let Some(e) = error {
                 Err(e)
+            } else if let Some(target) = &mcp {
+                mcp_search::search(target, &def, &request, &token).await
             } else {
                 adapters::search(&service.http, &request, &settings, &keys, &token).await
             };
@@ -305,6 +340,10 @@ impl ResearchService {
     pub fn shutdown(&self) {
         invalidate(&mut self.state.lock().unwrap());
     }
+}
+/// Whether a search cannot run without this key (the OpenAlex key only raises its quota).
+fn key_required(source_id: &str, field: &serde_json::Value) -> bool {
+    field["required"] == true && source_id != "openalex"
 }
 fn invalidate(s: &mut State) {
     s.generation = s.generation.wrapping_add(1);

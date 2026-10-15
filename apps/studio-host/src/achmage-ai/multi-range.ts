@@ -34,9 +34,9 @@ export function captureMultiRange(w:WasmBridge,identity:RhwpDocumentStateV1,a:Po
   if(start.paragraphIndex>end.paragraphIndex||start.paragraphIndex===end.paragraphIndex&&start.charOffset>end.charOffset)[start,end]=[end,start];
   const s=start.sectionIndex,count=w.getParagraphCount(s);
   if(!Number.isSafeInteger(start.paragraphIndex)||!Number.isSafeInteger(end.paragraphIndex)||start.paragraphIndex<0||end.paragraphIndex>=count)fail('올바른 본문 선택 영역이 아닙니다.');
-  if(end.paragraphIndex-start.paragraphIndex>63)fail('한 번에 64개 이내의 본문 문단을 선택하세요.');
+  if(end.paragraphIndex-start.paragraphIndex>3999)fail('한 번에 4,000개 이내의 본문 문단을 선택하세요.');
   // Everything outside the selection is read back after the edit; these bounds keep that check affordable.
-  if(count>4000)fail(`이 구역은 문단이 ${count}개라 선택 편집 뒤 전체 확인을 할 수 없습니다(4,000개까지).`);
+  if(count>20_000)fail(`이 구역은 문단이 ${count}개라 선택 편집 뒤 전체 확인을 할 수 없습니다(20,000개까지).`);
   const paragraphs=Array.from({length:count},(_,p)=>paragraph(w,s,p));
   if(paragraphs.reduce((n,p)=>n+Array.from(p.text).length,0)>1_000_000)fail('이 구역의 글이 너무 길어 선택 편집 뒤 전체 확인을 할 수 없습니다.');
   // A selection ending at the next paragraph's start (Shift+Down, drag to a line start) or starting at a paragraph's end
@@ -177,9 +177,9 @@ export function captureCellRange(w:WasmBridge,identity:RhwpDocumentStateV1,cell:
   const dims=JSON.parse(d.getTableDimensions(s,cell.parent,cell.control)) as {cellCount:number};
   if(!Number.isSafeInteger(cell.cell)||cell.cell<0||cell.cell>=dims.cellCount)fail('표 셀을 확인하지 못했습니다.');
   const count=d.getCellParagraphCount(s,cell.parent,cell.control,cell.cell);
-  if(x.paragraph<0||y.paragraph>=count||count>256||y.paragraph-x.paragraph>63)fail('셀 안에서 64개 이내의 문단을 선택하세요.');
+  if(x.paragraph<0||y.paragraph>=count||count>4096||y.paragraph-x.paragraph>3999)fail('셀 안에서 4,000개 이내의 문단을 선택하세요.');
   const paragraphs=Array.from({length:count},(_,p)=>cellParagraph(w,s,cell,p));
-  if(paragraphs.reduce((n,p)=>n+Array.from(p.text).length,0)>32000)fail('셀 글이 너무 깁니다.');
+  if(paragraphs.reduce((n,p)=>n+Array.from(p.text).length,0)>300_000)fail('셀 글이 너무 깁니다.');
   const len=(p:number)=>Array.from(paragraphs[p].text).length;
   if(y.paragraph>x.paragraph&&y.offset===0)y={paragraph:y.paragraph-1,offset:len(y.paragraph-1)};
   if(x.paragraph<y.paragraph&&x.offset===len(x.paragraph))x={paragraph:x.paragraph+1,offset:0};
@@ -200,7 +200,7 @@ export function captureCellRange(w:WasmBridge,identity:RhwpDocumentStateV1,cell:
  */
 export function executeMultiRange(w:WasmBridge,c:MultiRange,raw:string):Position&Partial<{parentParaIndex:number;controlIndex:number;cellIndex:number;cellParaIndex:number}> {
   const replacement=normalizeMultiReplacement(raw,c.before);
-  if(typeof replacement!=='string'||Array.from(replacement).length>32000||replacement.split('\n').length>64||/[\u0000-\u0008\u000b-\u001f\u007f]/.test(replacement)||/[\uD800-\uDFFF]/u.test(replacement))fail('응답은 올바른 유니코드와 줄바꿈을 포함해 32,000자 이내여야 합니다.');
+  if(typeof replacement!=='string'||Array.from(replacement).length>1_000_000||replacement.split('\n').length>4000||/[\u0000-\u0008\u000b-\u001f\u007f]/.test(replacement)||/[\uD800-\uDFFF]/u.test(replacement))fail('응답은 올바른 유니코드와 줄바꿈을 포함해 100만 자, 4,000문단 이내여야 합니다.');
   const s=c.start.sectionIndex,first=c.start.paragraphIndex,last=c.end.paragraphIndex,surface=c.cell?cellSurface(w,s,c.cell):bodySurface(w,s);
   const units=unitsOf(c),edits=editsOf(c,units,replacement);
   // New text takes the shape of what it replaces, else its left neighbour in the paragraph, else its right one.
@@ -230,7 +230,7 @@ export function executeMultiRange(w:WasmBridge,c:MultiRange,raw:string):Position
   for(;at<units.length;at++)push(units[at]);
   {const cur=planned.at(-1)!,start=cur.chars.length;chars(last).slice(c.end.charOffset).forEach((ch,i)=>cur.chars.push({ch,id:lastIds[c.end.charOffset+i]}));
    for(const x of c.edges.filter(x=>x.paragraph===last&&x.offset>c.end.charOffset))cur.objects.push({ctrlId:x.ctrlId,offset:start+x.offset-c.end.charOffset});}
-  if(planned.length>64)fail('응답의 문단이 너무 많습니다.');
+  if(planned.length>4000)fail('응답의 문단이 너무 많습니다.');
 
   // 2) The edits, last first so earlier positions stay valid. rhwp puts text inserted at an object's
   //    offset in front of the object, so new text goes in at the end of what it replaces and the old

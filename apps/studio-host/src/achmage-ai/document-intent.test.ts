@@ -116,7 +116,7 @@ describe('document intent bounded scope and typed plans',()=>{
  });
  it('long instructions pass while structured output and font validation remain',()=>{
   const f=fixture(['']);const text='가'.repeat(140000)+'끝표식';expect(prepareStructuredEdit(f.doc,f.deps,text).prompt).toContain(text);
-  expect(()=>decodeStructuredResponse('x'.repeat(65537))).toThrow('64KiB');
+  expect(()=>decodeStructuredResponse('x'.repeat(8*1024*1024+1))).toThrow('8MiB');
   f.deps.availableFonts=[];expect(()=>prepareStructuredEdit(f.doc,f.deps,'소제목')).toThrow('글꼴');
  });
  it('rejects duplicate JSON keys including escaped equivalents',()=>{

@@ -17,7 +17,7 @@ describe('Telegram open-document reader',()=>{
   expect(readDocumentForRemote(wasm())).toEqual({title:'회의록.hwpx',text:'회의 안건\n| 구분 | 금액 |\n| 인건비 | 300만 원 |\n결론: 예산 확정',truncated:false});
  });
  it('cuts at the byte budget and says so',()=>{
-  const long='가'.repeat(10000),read=readDocumentForRemote(wasm([long,long,long,long,long,long]));
+  const long='가'.repeat(10000);expect(readDocumentForRemote(wasm(Array(4).fill(long))).truncated).toBe(false);const read=readDocumentForRemote(wasm(Array(10).fill(long)));
   expect(read.truncated).toBe(true);expect(new TextEncoder().encode(read.text).length).toBeLessThanOrEqual(REMOTE_TEXT_BUDGET);
  });
  it('answers only well-formed requests, with the document text or the reason it failed',async()=>{

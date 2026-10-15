@@ -14,7 +14,8 @@ export interface IntentOptions { priorAssistantTexts?:readonly string[]; lastApp
   /** Scope already decided by the request router (whole body or caret insertion); wording is not re-read. */
   scope?:'whole'|'insertion'|'recent' }
 export interface PreparedStructuredEdit { capture:StructuredCapture; prompt:string; notices:string[];styleContext?:DocumentTemplate }
-const MAX_TEXT=65536;
+/** A structured answer for a long document (plan JSON, about 50만 자 of text). */
+const MAX_TEXT=8*1024*1024;
 const fail=(message:string):never=>{throw new Error(message);};
 const bytes=(s:string)=>new TextEncoder().encode(s).length;
 const aliases:Record<string,string>={'함초롱바탕':'함초롬바탕','함초롱돋움':'함초롬돋움'};
@@ -107,12 +108,12 @@ export function shouldUseStructuredEdit(text:string):boolean{
 }
 function bodyTexts(wasm:WasmBridge):string[]{
   if(wasm.getSectionCount()!==1)fail('현재 구조 편집은 한 구역 본문만 지원합니다.');
-  const n=wasm.getParagraphCount(0);if(n<1||n>256)fail('확인 가능한 문단 범위를 넘었습니다.');
+  const n=wasm.getParagraphCount(0);if(n<1||n>20_000)fail('확인 가능한 문단 범위를 넘었습니다.');
   let total=0;
   return Array.from({length:n},(_,i)=>{
-    const length=wasm.getParagraphLength(0,i);if(length>16000)fail('확인 가능한 문단 크기를 넘었습니다.');
+    const length=wasm.getParagraphLength(0,i);if(length>200_000)fail('확인 가능한 문단 크기를 넘었습니다.');
     const t=length?wasm.getTextRange(0,i,0,length):'';total+=Array.from(t).length;
-    if(total>32000)fail('확인 가능한 문서 크기를 넘었습니다.');return t;
+    if(total>1_000_000)fail('확인 가능한 문서 크기를 넘었습니다.');return t;
   });
 }
 /** Prompt projection only. Exact capture/fences remain untouched in the engine. */
@@ -313,7 +314,7 @@ export function prepareStructuredEdit(doc:AiDocument,deps:IntentDeps,userText:st
   return {capture,prompt,notices,...(styleContext?{styleContext}:{})};
 }
 export function decodeStructuredResponse(text:string,options:{availableFonts?:readonly string[];validateFonts?:boolean;notices?:string[];template?:DocumentTemplate}={}):StructuredPlan{
-  if(typeof text!=='string'||bytes(text)>MAX_TEXT)fail('구조 편집 응답이 64KiB를 넘었습니다.');
+  if(typeof text!=='string'||bytes(text)>MAX_TEXT)fail('구조 편집 응답이 8MiB를 넘었습니다.');
   const trimmed=text.trim();
   // Historical assistant drafts used a css label for literal annotations, not CSS code.
   const fence=/^\x60\x60\x60(json|css)[ \t]*\r?\n([\s\S]*?)\r?\n\x60\x60\x60$/i.exec(trimmed);

@@ -174,15 +174,36 @@ jobs:
           HOP_NOTICES_TARGET: ${{ matrix.target }}
         run: node scripts/achmage/third-party-notices.mjs
 
+      # On macOS Tauri bundles only the .app: its disk-image script failed on the hosted runner without saying why
+      # (1.1.0), so the .dmg is made here with hdiutil (app + Applications link), retried up to 5 times on failure.
       - name: Build Tauri bundle
         shell: bash
         env:
           HOP_MACOS_TARGET: ${{ matrix.target }}
+          HOP_BUNDLES: ${{ matrix.bundles }}
         run: |
           set -euo pipefail
           cd apps/desktop
-          pnpm tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}" \
+          bundles="$HOP_BUNDLES"
+          if [[ "$RUNNER_OS" == "macOS" ]]; then bundles="app"; fi
+          pnpm tauri build --target "$HOP_MACOS_TARGET" --bundles "$bundles" \
             --config src-tauri/tauri.achmage.conf.json --config src-tauri/tauri.achmage.release.conf.json
+          if [[ "$RUNNER_OS" == "macOS" && ",$HOP_BUNDLES," == *,dmg,* ]]; then
+            bundle="src-tauri/target/$HOP_MACOS_TARGET/release/bundle"
+            version="$(node -p "require('./src-tauri/tauri.achmage.release.conf.json').version")"
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || { echo "Unreadable release version: $version"; exit 1; }
+            arch="${HOP_MACOS_TARGET%%-*}"; [[ "$arch" == "x86_64" ]] && arch="x64"
+            stage="$RUNNER_TEMP/dmg-stage"; rm -rf "$stage"; mkdir -p "$stage" "$bundle/dmg"
+            ditto "$bundle/macos/Achmage HOP.app" "$stage/Achmage HOP.app"
+            ln -s /Applications "$stage/Applications"
+            dmg="$bundle/dmg/Achmage HOP_${version}_${arch}.dmg"
+            for attempt in 1 2 3 4 5; do
+              if hdiutil create -volname "Achmage HOP" -srcfolder "$stage" -ov -format UDZO "$dmg"; then break; fi
+              if [[ "$attempt" == 5 ]]; then exit 1; fi
+              echo "hdiutil create failed (attempt $attempt); retrying"; sleep $((attempt * 15))
+            done
+            hdiutil verify "$dmg"
+          fi
 
       - name: Collect bundle
         shell: bash
@@ -195,6 +216,8 @@ jobs:
           if [[ -d "$bundle/macos" ]]; then
             (cd "$bundle/macos" && for app in *.app; do ditto -c -k --keepParent "$app" "$out/${app%.app}-${{ matrix.name }}.app.zip"; done)
           fi
+          # The release notes promise a .dmg for macOS.
+          if [[ ",${{ matrix.bundles }}," == *,dmg,* ]] && ! compgen -G "$out/*.dmg" >/dev/null; then echo "No .dmg was made"; exit 1; fi
           cp target/achmage/kordoc-packaging-latest.json "$out/kordoc-packaging.json"
           cp apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.md "$out/THIRD_PARTY_NOTICES.md"
           if command -v shasum >/dev/null; then sum="shasum -a 256"; else sum="sha256sum"; fi

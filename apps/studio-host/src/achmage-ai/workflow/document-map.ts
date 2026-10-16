@@ -1,4 +1,5 @@
 import {checkboxTargets} from '../checkbox-edit';
+import {maskSafeEnd} from '../outbound-gate';
 import type { WasmBridge } from '@/upstream/core';
 export type Handle = NonNullable<ReturnType<WasmBridge['borrowDocumentHandle']>>;
 export interface Address { section:number; paragraph:number; control?:number; cell?:number; cellParagraph?:number }
@@ -51,7 +52,7 @@ export class DocumentMap {
   if(req.query){const q=req.query.normalize('NFKC').toLocaleLowerCase();const hits=new Set<number>();chosen.forEach((n,i)=>{if(n.text.normalize('NFKC').toLocaleLowerCase().includes(q)){for(let j=Math.max(0,i-2);j<=Math.min(chosen.length-1,i+5);j++)hits.add(j);}});chosen=chosen.filter((_,i)=>hits.has(i));}
   let budget=20_000;const nodes=[];
   for(const n of chosen.slice(offset,offset+80)){
-   const chars=Array.from(n.text),text=chars.slice(start,start+Math.min(3000,budget)).join('');
+   const chars=Array.from(n.text),text=chars.slice(start,maskSafeEnd(chars,start+Math.min(3000,budget))).join('');
    if(text.length>budget&&nodes.length)break;
    const intervals=[...(this.coverage.get(n.id)??[]),[Math.min(start,chars.length),Math.min(chars.length,start+Array.from(text).length)] as [number,number]].sort((a,b)=>a[0]-b[0]);
    let end=0;for(const [a,b] of intervals){if(a>end)break;end=Math.max(end,b);}this.coverage.set(n.id,intervals);

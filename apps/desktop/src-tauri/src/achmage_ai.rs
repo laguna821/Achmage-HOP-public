@@ -373,8 +373,20 @@ fn discover_codex() -> Option<PathBuf> {
     // Desktop launchers often have a shorter PATH than an interactive shell. Prefer the
     // engine maintained by the installed ChatGPT app, while respecting an explicit override.
     #[cfg(target_os = "linux")]
-    let candidates = prefer_bundled_codex(candidates, override_path.is_some(), PathBuf::from("/usr/lib/chatgpt/resources/codex"));
+    let candidates = {
+        let bundle = PathBuf::from("/usr/lib/chatgpt/resources/codex");
+        if root_owned(&bundle) { prefer_bundled_codex(candidates, override_path.is_some(), bundle) } else { candidates }
+    };
     candidates.into_iter().find_map(valid_codex_candidate)
+}
+
+/// A fixed system path is trusted only when it and every directory above it belong to root and nobody else can
+/// write to them; otherwise a package or link placed there could run with the user's sign-in.
+#[cfg(target_os = "linux")]
+fn root_owned(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(real) = path.canonicalize() else { return false };
+    real.ancestors().all(|p| std::fs::metadata(p).is_ok_and(|m| m.uid() == 0 && m.mode() & 0o022 == 0))
 }
 
 #[cfg(target_os = "linux")]
@@ -1044,6 +1056,15 @@ mod codex_discovery_tests {
         assert_eq!(choose(prefer_bundled_codex(vec![old.clone()],false,bundle.clone())),Some(bundle.canonicalize().unwrap()));
         assert_eq!(choose(prefer_bundled_codex(vec![explicit.clone(),old.clone()],true,bundle)),Some(explicit.canonicalize().unwrap()));
         assert_eq!(choose(prefer_bundled_codex(vec![old.clone()],false,root.join("absent/codex"))),Some(old.canonicalize().unwrap()));
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_bundle_must_be_root_owned_and_closed_to_other_writers() {
+        use std::os::unix::fs::MetadataExt;
+        let root=fixture();let own=root.join("codex");executable(&own,1);
+        assert!(!root_owned(std::path::Path::new("/nonexistent/chatgpt/codex")));
+        // A file the test user created is not trusted (unless the tests themselves run as root).
+        if std::fs::metadata(&own).unwrap().uid()!=0 { assert!(!root_owned(&own)); }
     }
     #[test]
     fn override_then_newest_bundle_then_path_then_npm() {

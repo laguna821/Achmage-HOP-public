@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { maskNotice, maskPersonal, maskPersonalDeep, restorePersonal } from './outbound-gate';
+import { maskNotice, maskPersonal, maskPersonalDeep, maskSafeEnd, restorePersonal } from './outbound-gate';
 import { gateResearchAction } from '../achmage-research/types';
 
 describe('outbound personal-data gate', () => {
@@ -63,6 +63,15 @@ describe('outbound personal-data gate', () => {
   });
   it.each(['(02)1234-5678', '010.1234.5678', '(031) 765-4321'])('masks phone formats with dots and parentheses: %s', text => {
     expect(maskPersonal(text).kinds).toEqual(['phone']);
+  });
+  it('never cuts text inside a run of non-space characters, so a split identifier cannot escape the masks', () => {
+    const chars = Array.from('주민 900101-1234567 끝');
+    expect(maskSafeEnd(chars, 9)).toBe(17);
+    expect(maskPersonal(chars.slice(0, maskSafeEnd(chars, 9)).join('')).text).not.toContain('900101');
+    expect(maskSafeEnd(chars, 17)).toBe(17);
+    expect(maskSafeEnd(chars, 0)).toBe(0);
+    expect(maskSafeEnd(chars, 100)).toBe(chars.length);
+    expect(maskSafeEnd(Array.from('a'.repeat(200)), 10)).toBe(74);
   });
   it('restores tokens whose brackets the model rewrote', () => {
     const masked = maskPersonal('문의 a@example.com');

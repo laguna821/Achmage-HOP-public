@@ -1,9 +1,12 @@
 # Existing form operations
+
+(Earlier step. Table structure edits, multi-cell edits and table-scoped checkboxes were added later; see docs/ai-workflow-upgrade.md.)
+
 Background: checkbox requests can be misrouted to template recomposition; clearing the selected template is obscure.
 Goal: expose preserve-format default; let the AI router select an explicitly scoped all-checkbox operation, then execute locally using existing form setters inside one rollback-capable snapshot.
 Non-goals: arbitrary table structural edits, changing radio buttons, interpreting drawn/Unicode symbols as interactive forms, regenerating existing forms.
 Implementation: no natural-language keyword trigger; router action clear_checkboxes requires scope=document and an open document. Partial targets are rejected, unknown targets are not expanded. Bounded render-tree discovery plus hit-tested native addresses, deduplicate repeated controls, preflight all targets, apply and read back. Reject ambiguous addresses before mutation. Report actual count and coverage, not universal completion. Router must not substitute recomposition for unsupported object edits.
-Verification: native pinned engine body/table form fixtures, readback, export/reopen, Undo, idempotence; routing negatives; UI clear-template persistence. Existing fonts and user documents untouched. Immutable local install; previous launcher retained for rollback.
+Verification: native pinned engine body/table form fixtures, readback, export/reopen, Undo, idempotence; routing negatives; UI clear-template persistence. Existing fonts and user documents untouched. The previous install is kept for rollback.
 
 Validation: 133 focused tests passed with one worker (parallel run hit CPU-contention timeouts; corrected panel harness dispatches input before click). TypeScript passed. Native public body HWP and table HWPX fixtures clear, preserve text/control list, save/reopen, and Undo to identical exported bytes. User document and arbitrary table restructuring are not validated.
 

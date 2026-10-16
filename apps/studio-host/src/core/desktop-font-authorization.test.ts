@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 const entry = { family: 'HY헤드라인M', postScriptName: 'HYHeadLineM',
-  style: 'normal', sourceKind: 'file-backed', path: 'C:/Users/me/AppData/Local/Microsoft/Windows/Fonts/HYHEADLINE.TTF' };
+  style: 'normal', sourceKind: 'file-backed', path: 'C:/fixtures/fonts/restricted-face.ttf' };
 
 function environment(fail: 'read' | 'load' | 'add' | null = null) {
   const add = vi.fn(() => { if (fail === 'add') throw new Error('registration failed'); });
@@ -33,8 +33,8 @@ describe('authorized local font lifecycle', () => {
     expect(fonts.getDesktopFonts()).not.toContain(entry.family);
   });
 
-  it('loads an installed protected face from verified bytes on Linux before authoring', async () => {
-    const {add}=environment();const system={...entry,family:'HY신명조',sourceKind:'system-installed',path:'/home/test/.local/share/fonts/H2MJSM.TTF'};
+  it('makes a user-installed, license-restricted family usable only after loading it from that installation', async () => {
+    const {add}=environment();const system={...entry,family:'HY신명조',sourceKind:'system-installed',path:'/fixtures/fonts/restricted-face-2.ttf'};
     invoke.mockImplementation(async(name:string)=>name==='list_local_fonts'?[system]:[0,1,2,3]);
     const fonts=await import('./desktop-local-fonts');const policy=await import('./font-authoring-policy');
     await fonts.detectDesktopFontEntries();expect(policy.isAuthoringBlockedFontFamily(system.family)).toBe(true);

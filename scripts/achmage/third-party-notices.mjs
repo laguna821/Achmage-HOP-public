@@ -28,11 +28,18 @@ function addText(file, owner) {
   texts.get(key).users.add(owner);
   return key;
 }
-function licenseTexts(dir, owner) {
+function licenseTexts(dir, owner, nested = []) {
   if (!dir || !fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).sort()
+  const keys = fs.readdirSync(dir).sort()
     .filter((name) => LICENSE_FILE.test(name) && fs.statSync(path.join(dir, name)).isFile())
-    .map((name) => addText(path.join(dir, name), owner)).filter(Boolean);
+    .map((name) => addText(path.join(dir, name), owner));
+  // Some packages carry the licences of code they adapted in a folder of their own (kordoc: THIRD_PARTY/).
+  for (const sub of nested) {
+    const folder = path.join(dir, sub);
+    if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) continue;
+    for (const name of fs.readdirSync(folder).sort()) if (fs.statSync(path.join(folder, name)).isFile()) keys.push(addText(path.join(folder, name), `${owner} (${sub}/${name})`));
+  }
+  return keys.filter(Boolean);
 }
 const refs = (keys) => keys.length ? keys.map((k) => `[${k.slice(0, 8)}](#license-${k.slice(0, 8)})`).join(' ') : '(no license file in the package)';
 
@@ -93,7 +100,7 @@ function npmClosure(base, names) {
     if (result.has(key)) continue;
     const license = typeof pkg.license === 'string' ? pkg.license : pkg.license?.type ?? (pkg.licenses ?? []).map((l) => l.type ?? l).join(' OR ') ?? 'unknown';
     const author = typeof pkg.author === 'string' ? pkg.author : pkg.author?.name;
-    result.set(key, {name: pkg.name, version: pkg.version, license: license || 'unknown', source: author ?? '', keys: licenseTexts(dir, key)});
+    result.set(key, {name: pkg.name, version: pkg.version, license: license || 'unknown', source: author ?? '', keys: licenseTexts(dir, key, ['THIRD_PARTY', 'third_party', 'LICENSES', 'licenses'])});
     for (const dep of Object.keys(pkg.dependencies ?? {})) queue.push([dir, dep]);
   }
   return [...result.values()].sort((a, b) => a.name.localeCompare(b.name));

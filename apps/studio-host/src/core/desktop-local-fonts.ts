@@ -209,6 +209,8 @@ export async function ensureDesktopFontsAvailable(
   if (!supportsBinaryFontLoading()) return available;
 
   const requested = resolveRequestedFamilies(entries, targetFamilies);
+  // License-restricted faces (font-authoring-policy) become usable only when the user has installed them: their
+  // bytes are read from that installation into memory to draw them. The app never ships or keeps its own copy.
   const groups = groupEntriesByPath(entries.filter((entry) =>
     (entry.sourceKind === 'file-backed' || isAuthoringBlockedFontFamily(entry.family))
       && Boolean(entry.path) && requested.has(entry.family),

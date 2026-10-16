@@ -1,4 +1,5 @@
 import type { ProviderId } from './bridge';
+import { maskSafeEnd } from './outbound-gate';
 
 export const CHAT_STORAGE_KEY = 'achmage.hop.chat.v1';
 export const PANEL_WIDTH_KEY = 'achmage.hop.panel.width';
@@ -69,12 +70,13 @@ export function conversationContext(entries: ChatEntry[], provider: ProviderId, 
   const chosen = session.length > 24 ? [session[0], ...session.slice(-23)] : session;
   const first = chosen[0];
   if (!first) return [];
-  const brief = {role:first.role,text:Array.from(first.text).slice(0,8000).join('')};
+  const firstChars = Array.from(first.text);
+  const brief = {role:first.role,text:firstChars.slice(0,maskSafeEnd(firstChars,8000)).join('')};
   let remaining = 48000 - Array.from(brief.text).length;
   const tail: {role:'user'|'assistant';text:string}[] = [];
   for (const entry of chosen.slice(1).reverse()) {
-    if (!remaining) break;
-    const chars=Array.from(entry.text).slice(0,Math.min(8000,remaining));
+    if (remaining <= 0) break;
+    const all=Array.from(entry.text),chars=all.slice(0,maskSafeEnd(all,Math.min(8000,remaining)));
     remaining-=chars.length;
     tail.unshift({role:entry.role,text:chars.join('')});
   }

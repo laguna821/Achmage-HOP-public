@@ -29,7 +29,7 @@ import { installRuntimeTools } from './runtime-tools';
 import { installTelegramSettings } from './telegram-settings';
 import { requestTemplateImport, PANEL_ASK_EVENT, PANEL_EDIT_EVENT, PANEL_RESTYLE_EVENT, PANEL_TOC_EVENT, PANEL_WHOLE_EDIT_EVENT, publishPanelStatus, registerPanelAction, watchPanelActions, type PanelEditRequest, type PanelAction } from './panel-events';
 import { installResearchExtension } from '../achmage-research';
-import { conversationContext, addHistory, loadHistory, saveHistory, panelWidth, acceptsCompletion, unwrapQuotedReply, loadProvider, saveProvider, PANEL_WIDTH_KEY, CHAT_STORAGE_KEY, type ChatEntry } from './panel-state';
+import { conversationContext, addHistory, boundedHistory, loadHistory, saveHistory, panelWidth, acceptsCompletion, unwrapQuotedReply, loadProvider, saveProvider, PANEL_WIDTH_KEY, CHAT_STORAGE_KEY, type ChatEntry } from './panel-state';
 import type { WasmBridge, EventBus } from '@/upstream/core';
 import type { InputHandler } from '@/upstream/editor';
 import type { CanvasView } from '@/upstream/view';
@@ -99,12 +99,14 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   let stopImage: () => void = () => {};
   let disposed = false, polling = false, composing = false, applying = false, closed = false;
   let extensionActions: PanelAction[] = [];
+  // storedHistory: the saved conversation a fresh workflow window has not restored yet; it is kept when saving.
+  let storedHistory: ChatEntry[] = [];
   let width = 380, history: ChatEntry[] = [], renderedHistory = '', renderedModels = '', renderedProviders = '';
   let loginIntent: { provider: ProviderId; until: number } | null = null;
   /** The provider chosen in an earlier session, selected again once it is available (first 20 s after launch). */
   let savedProvider: ProviderId | null = null; const providerRestoreUntil = panelOptions.restoreSignIn === false ? 0 : Date.now() + 20_000, restoreChecked = new Set<ProviderId>();
   try { savedProvider = loadProvider(localStorage); } catch { savedProvider = null; }
-  try { history = workflowEnabled?[]:loadHistory(localStorage); const saved = localStorage.getItem(PANEL_WIDTH_KEY); if (saved !== null) width = panelWidth(Number(saved)); } catch { /* unavailable storage keeps a working in-memory session */ }
+  try { if (workflowEnabled) storedHistory = loadHistory(localStorage); else history = loadHistory(localStorage); const saved = localStorage.getItem(PANEL_WIDTH_KEY); if (saved !== null) width = panelWidth(Number(saved)); } catch { /* unavailable storage keeps a working in-memory session */ }
   type RouterPlan = { text: string; template?: DocumentTemplate; card: DocumentStateCard; templates: TemplateOffer[]; document: string; selection: string };
   let request: { id: string; payload: string; mask?: MaskedText; failed?: boolean; completedAt?: number; routedMs?: number; lastTextLength?: number; lastTextAt?: number; model?: string; effort?: string; router?: RouterPlan; capture?: Capture; structured?: StructuredCapture; kordoc?: string; blockPatch?: { blocks: string[] }; local?: boolean; inPlace?: { identity: RhwpDocumentStateV1; hideFirstPage: boolean; toc?: boolean }; styleContext?: DocumentTemplate; notices?: string[]; startedAt: number; firstTextAt?: number; session: string; provider: ProviderId; completed: boolean; stale: boolean } | null = null;
   /** The AI only hears turns after this point; '새 대화 시작' moves it. Plain answers can be inserted as-is. */
@@ -147,7 +149,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   }
   function remember(entry: ChatEntry): void {
     history = addHistory(history, entry);
-    try { if (!saveHistory(localStorage, history)) message('대화 저장 공간이 부족합니다. 현재 창에서는 계속 사용할 수 있습니다.'); } catch { message('대화는 현재 창에서만 유지됩니다.'); }
+    try { if (!saveHistory(localStorage, [...storedHistory, ...history])) message('대화 저장 공간이 부족합니다. 현재 창에서는 계속 사용할 수 있습니다.'); } catch { message('대화는 현재 창에서만 유지됩니다.'); }
   }
   /** Personal identifiers were masked before sending; the reply gets the original values back locally. */
   function restoredReply(active: { mask?: MaskedText } | null | undefined, text: string): { text: string; unknown: string[]; missing: number } {
@@ -286,7 +288,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     for (const item of panel.querySelectorAll<HTMLElement>('[data-provider-tool]')) item.hidden = item.dataset.providerTool !== state?.selectedProvider;
     button('clear-history').disabled = locked || !!running;
     button('new-conversation').disabled = locked || !!running;
-    button('restore-history').disabled=locked||!!running||history.length>0;
+    button('restore-history').disabled=locked||!!running||!storedHistory.length;
     q<HTMLSelectElement>('.achmage-provider-switch').disabled = !!workflowAbort || locked || state?.busy === true || composing;
     const currentTurn = request && sameAuthSession(state, request.session) && state?.turn?.requestId === request.id;
     q('.achmage-answer').hidden = !currentTurn || !!request?.completed || !!request?.structured || !!request?.kordoc || !state?.turn?.text || !!request?.router && looksLikeRouterAction(state.turn.text);
@@ -450,7 +452,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     let template: DocumentTemplate | undefined;
     // A broken saved template never blocks a request that does not need one (F12).
     try { template=documentTemplates?.current(); } catch { template=undefined; message('저장된 문서 서식을 읽지 못해 서식 없이 진행합니다. 서식 창에서 확인해 주세요.', 'info'); }
-    // "문서 전체를 이 서식으로 바꿔줘" is typeset by the app: no sign-in, no routing turn, nothing sent anywhere.
+    // Compatibility mode (workflow off): "문서 전체를 이 서식으로 바꿔줘" is typeset by the app with no sign-in or routing turn.
     if(workflowEnabled){await sendWorkflow(text,captured,template,instruction===undefined);return;}
     const look = lookOnlyRoute(text, captured, template, options.whole === true);
     if (composing || applying || connection.busy || state?.commandPending || state?.busy || !look && state?.auth.status !== 'signed_in') { message(busyMessage()); return; }
@@ -476,7 +478,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     const controller=new AbortController();workflowAbort=controller;choices=null;request=null;
     const requestDocument=generationIdentity();let draft:WorkflowDraft|null=null;
     const prior=conversationContext(visibleHistory().map(e=>({...e,provider:state.selectedProvider})),state.selectedProvider,contextFrom);
-    const id=crypto.randomUUID();workflowSources.push({id,text});remember({id,provider:state.selectedProvider,role:'user',text,at:Date.now()});if(clearPrompt)prompt.value='';
+    const id=crypto.randomUUID();workflowSources.push({id,text});if(workflowSources.length>24)workflowSources=workflowSources.slice(-24);remember({id,provider:state.selectedProvider,role:'user',text,at:Date.now()});if(clearPrompt)prompt.value='';
     try{
       let selection=captured;
       if(!selection)try{selection=doc.captureSelection();}catch{selection=retainedSelection;}
@@ -494,6 +496,8 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
           if(call.action==='undo'){if(lastWorkflow?.identity!==requestDocument)throw Error('직전 AI 작업 뒤 문서가 바뀌어 자동으로 되돌리지 않았습니다. Ctrl+Z 기록을 확인하세요.');deps.undo();lastWorkflow=undefined;message('직전 AI 작업을 되돌렸습니다.','success');return;}
           const chosen=call.templateId?findTemplate(call.templateId,template):template;
           if(call.templateId&&!chosen)throw Error('선택한 서식을 찾을 수 없습니다.');
+          // As with the router: another template only when the user named it, never the model's own choice.
+          if(chosen&&chosen.id!==template?.id&&!mentionsTemplate(text,chosen.name))throw Error('서식 창에서 고른 서식이나 요청에서 이름을 말한 서식만 쓸 수 있습니다.');
           workflowAbort=null;
           if(!await runOperation(call.action as OperationId,text,call.instruction,chosen,session,false))throw Error('작업을 시작하지 못했습니다. 표시된 원인을 확인하세요.');
         },
@@ -778,7 +782,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   };
   button('cancel-login').onclick = () => { loginIntent = null; void act({ type: 'cancel_login' }); };
   q<HTMLSelectElement>('.achmage-provider-switch').onchange = () => { loginIntent = null; const provider = q<HTMLSelectElement>('.achmage-provider-switch').value as ProviderId; savedProvider = null; void act({ type: 'select_provider', provider }).then(ok => { if (ok) saveProvider(localStorage, provider); }); };
-  button('logout').onclick = () => { workflowAbort?.abort(); request = null; void act({ type: 'logout' }); };
+  button('logout').onclick = () => { workflowAbort?.abort(); request = null; workflowSources = []; lastWorkflow = undefined; retainedSelection = undefined; void act({ type: 'logout' }); };
   // Only providers whose official CLI lists models re-read the catalog; the others keep their status-only refresh.
   button('refresh').onclick = () => { const current=connection.current; if(current&&CATALOG_PROVIDERS.has(current.selectedProvider)&&current.auth.status==='signed_in')void act({type:'refresh_models'});else void refresh(); };
   q<HTMLSelectElement>('.achmage-model').onchange=()=>render();
@@ -803,9 +807,9 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     if (!Object.values(saved).some(value => value)) { message('저장된 내 정보가 없습니다.', 'info'); return; }
     void navigator.clipboard.writeText(JSON.stringify(saved, null, 2)).then(() => message('저장된 내 정보를 JSON으로 클립보드에 복사했습니다.', 'info'), () => message('클립보드에 복사하지 못했습니다.'));
   };
-  button('new-conversation').onclick = () => { if (workflowAbort || connection.busy || connection.current?.busy || connection.current?.turn?.status === 'running' || applying) return; history = [];workflowSources=[]; contextFrom = 0; lastWorkflow=undefined;retainedSelection=undefined;request = null; prompt.value = ''; try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch { /* memory reset still works */ } lastAnswer = undefined; lastApplied = undefined; choices = null; q('.achmage-account-menu').hidden = true; message('새 대화를 시작했습니다. 문서와 계정 연결은 유지됩니다.', 'info'); render(); };
-  button('restore-history').onclick=()=>{if(workflowAbort||applying||connection.current?.busy||history.length)return;history=loadHistory(localStorage);contextFrom=0;message(history.length?'이전 대화를 불러왔습니다. 현재 문서를 다시 확인하며 이어갑니다.':'저장된 대화가 없습니다.','info');render();};
-  button('clear-history').onclick = () => { if (confirm('이 기기에 보관된 모든 제공자의 대화를 지울까요? 문서는 바뀌지 않습니다.')) { history = []; try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch { /* memory still cleared */ } render(); } };
+  button('new-conversation').onclick = () => { if (workflowAbort || connection.busy || connection.current?.busy || connection.current?.turn?.status === 'running' || applying) return; if ((history.length || storedHistory.length) && !confirm('이 컴퓨터의 대화 기록(모든 제공사)을 지우고 새로 시작할까요? 문서는 바뀌지 않습니다.')) return; history = [];storedHistory = [];workflowSources=[]; contextFrom = 0; lastWorkflow=undefined;retainedSelection=undefined;request = null; prompt.value = ''; try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch { /* memory reset still works */ } lastAnswer = undefined; lastApplied = undefined; choices = null; q('.achmage-account-menu').hidden = true; message('새 대화를 시작했습니다. 문서와 계정 연결은 유지됩니다.', 'info'); render(); };
+  button('restore-history').onclick=()=>{if(workflowAbort||applying||connection.current?.busy||!storedHistory.length)return;history=boundedHistory([...storedHistory,...history]);storedHistory=[];contextFrom=0;message('이전 대화를 불러왔습니다. 현재 문서를 다시 확인하며 이어갑니다.','info');render();};
+  button('clear-history').onclick = () => { if (confirm('이 기기에 보관된 모든 제공자의 대화를 지울까요? 문서는 바뀌지 않습니다.')) { history = []; storedHistory = []; workflowSources = []; lastWorkflow = undefined; retainedSelection = undefined; lastAnswer = undefined; lastApplied = undefined; choices = null; contextFrom = 0; try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch { /* memory still cleared */ } render(); } };
   button('account').onclick = () => { const element = q('.achmage-account-menu'); element.hidden = !element.hidden; button('account').setAttribute('aria-expanded', String(!element.hidden)); };
   button('tools').onclick = () => { const element = q('.achmage-more'); element.hidden = !element.hidden; button('tools').setAttribute('aria-expanded', String(!element.hidden)); };
   for (const [name,id] of extensionButtons) button(name).onclick = () => extensionActions.find(action => action.id === id)?.run();

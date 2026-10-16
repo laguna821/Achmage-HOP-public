@@ -11,6 +11,14 @@ const TOKEN = (n: number) => `〔개인정보${n}〕`;
 /** Models sometimes rewrite the brackets ([개인정보1]); those are still our tokens. */
 const TOKEN_PATTERN = /[〔\[]개인정보(\d+)[〕\]]/gu;
 /** A masking token still in text that is about to be applied (it was never restored). */
+/** Where to cut text that will be masked: never inside a run of non-space characters (up to 64 more), since an
+ * identifier split in two ("900101-12") no longer matches its pattern and would be sent as it is. */
+export function maskSafeEnd(chars: readonly string[], end: number): number {
+  let cut = Math.min(Math.max(end, 0), chars.length);
+  const limit = cut + 64;
+  while (cut > 0 && cut < chars.length && cut < limit && /\S/u.test(chars[cut - 1]!) && /\S/u.test(chars[cut]!)) cut++;
+  return cut;
+}
 export const hasPersonalToken = (text: string): boolean => new RegExp(TOKEN_PATTERN.source, 'u').test(text);
 
 const digits = (s: string) => s.replace(/\D/g, '');

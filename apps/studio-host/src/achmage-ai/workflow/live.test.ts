@@ -20,7 +20,7 @@ for(const text of ['수업개요 빈칸에 미디어콘텐츠 바이브코딩 PB
 },300000);
 live('follow-up keeps the course brief and completes the omitted field',async()=>{
  const h=historyHarness(bodyDocument(['신청서',''])),t=JSON.parse(h.native.createTable(0,1,0,2,2));h.native.insertTextInCell(0,t.paraIdx,t.controlIdx,0,0,0,'수업개요');h.native.insertTextInCell(0,t.paraIdx,t.controlIdx,2,0,0,'교육목표');
- const history:{role:string;text:string}[]=[];const brief='미디어콘텐츠 바이브코딩 과목이야. 학부 3-4학년이 옵시디언 GitHub Claude Code Codex로 HTML 슬라이드와 웹을 만드는 PBL이고 더픽트와 해커톤 출품을 목표로 해. 수업개요부터 그 칸에 채워줘.';
+ const history:{role:string;text:string}[]=[];const brief='미디어콘텐츠 바이브코딩 과목이야. 학부 3-4학년이 옵시디언 GitHub Claude Code Codex로 HTML 슬라이드와 웹을 만드는 PBL이고 협력 기업과 해커톤 출품을 목표로 해. 수업개요부터 그 칸에 채워줘.';
  try{for(const text of [brief,'아 목표는 왜 안했어 거기도 마저 해']){const d=new WorkflowDraft(h.wasm,h.adapter.identity());try{const r=await runWorkflow({text,history},d,{ask,commit:d=>d.commit(h.adapter),action:async()=>{throw Error('must preserve form');},progress:()=>{}},new AbortController().signal);history.push({role:'user',text},{role:'assistant',text:r.text});}finally{d.close();}}
   const all=h.native.getTextFileUnicode();expect(all).toContain('바이브코딩');expect(h.native.getCellParagraphLength(0,t.paraIdx,t.controlIdx,3,0)).toBeGreaterThan(0);expect(all).not.toContain('지역사회 문제를');
  }finally{h.close();}

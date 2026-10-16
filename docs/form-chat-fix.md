@@ -13,9 +13,9 @@ In 1.1.0, the router detects text selected within a table cell but excludes it f
 Multi-cell and nested-table edits remain unsupported. Existing document/selection identity checks and rollback remain in place. This change does not reintroduce image generation or modify fonts, upstream source, authentication, or release versions. New conversation clears the locally retained transcript for all providers, matching the existing global history store.
 
 ## Verification
-146 focused tests passed across intent-router, panel-state, multi-range, panel, form-cell, document and selection-context suites. Coverage includes adjacent-cell/table preservation, multiline insertion into an empty cell, one-step undo and stale-target rejection. TypeScript checking and a native Linux build passed. Native smoke checks verified the header action, reset followed by reload, font loading and Kordoc startup. The local upgrade preserved all 667 protected font/config file hashes.
+146 focused tests passed across intent-router, panel-state, multi-range, panel, form-cell, document and selection-context suites. Coverage includes adjacent-cell/table preservation, multiline insertion into an empty cell, one-step undo and stale-target rejection. TypeScript checking and a native Linux build passed. Native smoke checks verified the header action, reset followed by reload, font loading and Kordoc startup. Font files were not modified.
 
-The user's real form was not changed for testing; live-model form editing and macOS/Windows native execution remain unverified.
+No user document was changed for testing; live-model form editing and macOS/Windows native execution remain unverified.
 
 ## Recovery
 Keep the prior installed binary and launcher until the new build has been reviewed. No document migration or font installation is required.

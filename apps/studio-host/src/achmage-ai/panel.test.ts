@@ -507,6 +507,18 @@ describe('model-routed chat messages',()=>{
   });
 });
 describe('common workflow panel',()=>{
+ it('keeps the saved conversation when a fresh window sends first, and clearing forgets earlier requests',async()=>{
+  localStorage.setItem(CHAT_STORAGE_KEY,JSON.stringify([{id:'old',provider:'openai',role:'user',text:'어제 대화',at:1}]));
+  await start(0,{workflow:true,restoreSignIn:false});
+  q('.achmage-prompt').value='오늘 질문';q('.achmage-prompt').dispatchEvent(event('input'));const pending=btn('send').click();await flush();const sent=sentRequest();
+  state={...state,generation:state.generation+1,turn:{id:sent.requestId,requestId:sent.requestId,status:'completed',text:'{"tool":"answer","text":"네"}'}};await vi.advanceTimersByTimeAsync(1500);await pending;
+  expect(localStorage.getItem(CHAT_STORAGE_KEY)).toContain('어제 대화');expect(btn('restore-history').disabled).toBe(false);
+  expect(q('.achmage-history').children.length).toBe(2);await btn('restore-history').click();expect(q('.achmage-history').children.length).toBe(3);expect(btn('restore-history').disabled).toBe(true);
+  await btn('clear-history').click();
+  q('.achmage-prompt').value='다음 질문';q('.achmage-prompt').dispatchEvent(event('input'));const next=btn('send').click();await flush();const again=action.mock.calls.filter(call=>call[1].type==='send').at(-1)![1] as {prompt:string;requestId:string};
+  expect(again.prompt).not.toContain('오늘 질문');expect(again.prompt).not.toContain('어제 대화');
+  state={...state,generation:state.generation+1,turn:{id:again.requestId,requestId:again.requestId,status:'completed',text:'{"tool":"answer","text":"네"}'}};await vi.advanceTimersByTimeAsync(1500);await next;
+ });
  it('starts fresh, restores only explicitly, answers through the common transport, then resets',async()=>{
   localStorage.setItem(CHAT_STORAGE_KEY,JSON.stringify([{id:'old',provider:'openai',role:'user',text:'옛날 비밀 과목',at:1}]));
   await start(0,{workflow:true,restoreSignIn:false});expect(q('.achmage-history').children).toHaveLength(0);

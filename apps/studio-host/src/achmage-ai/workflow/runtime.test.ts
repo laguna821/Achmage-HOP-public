@@ -25,8 +25,8 @@ describe('provider-independent workflow loop',()=>{
 });
 it('recovers an unavailable font name through resource discovery before staging',async()=>{
  const h=historyHarness(bodyDocument(['본문'])),d=new WorkflowDraft(h.wasm,h.adapter.identity());let step=0;try{const id=d.read().nodes[0].id;
-  const replies=[{tool:'format',ids:[id],format:{fontFamily:'신명조'}},{tool:'fonts',query:'신명조'},{tool:'format',ids:[id],format:{fontFamily:'HY신명조',fontSizePt:11}},{tool:'finish',text:'설치된 HY신명조를 적용합니다.'}];
-  const result=await runWorkflow({text:'신명조로',history:[]},d,{fonts:async()=>['HY신명조'],ask:async p=>{if(step===1)expect(p).toContain('fonts 도구');if(step===2)expect(p).toContain('HY신명조');return JSON.stringify(replies[step++]);},commit:d=>d.commit(h.adapter),action:async()=>{},progress:()=>{}},new AbortController().signal);
-  expect(result.changed).toBe(1);expect(JSON.parse(h.native.getCharPropertiesAt(0,0,0)).fontFamilies).toEqual(Array(7).fill('HY신명조'));
+  const replies=[{tool:'format',ids:[id],format:{fontFamily:'명조'}},{tool:'fonts',query:'명조'},{tool:'format',ids:[id],format:{fontFamily:'나눔명조',fontSizePt:11}},{tool:'finish',text:'설치된 나눔명조를 적용합니다.'}];
+  const result=await runWorkflow({text:'명조로',history:[]},d,{fonts:async()=>['나눔명조'],ask:async p=>{if(step===1)expect(p).toContain('fonts 도구');if(step===2)expect(p).toContain('나눔명조');return JSON.stringify(replies[step++]);},commit:d=>d.commit(h.adapter),action:async()=>{},progress:()=>{}},new AbortController().signal);
+  expect(result.changed).toBe(1);expect(JSON.parse(h.native.getCharPropertiesAt(0,0,0)).fontFamilies).toEqual(Array(7).fill('나눔명조'));
  }finally{d.close();h.close();}
 });

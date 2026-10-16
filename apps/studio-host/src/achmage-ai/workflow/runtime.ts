@@ -1,4 +1,5 @@
 import {decodeTool,type ToolCall} from './protocol';
+import {maskSafeEnd} from '../outbound-gate';
 import type {WorkflowDraft} from './draft';
 export interface WorkflowContext {text:string;history:{role:string;text:string}[];selection?:unknown;templates?:unknown;actions?:unknown;recent?:unknown;focus?:unknown;sources?:{id:string;text:string}[]}
 export interface WorkflowHost {
@@ -33,7 +34,7 @@ const stopped=(signal:AbortSignal)=>{if(signal.aborted)throw Error('요청을 �
 /** Provider-independent orchestration; model text never executes code or touches file paths. */
 export async function runWorkflow(context:WorkflowContext,draft:WorkflowDraft|null,host:WorkflowHost,signal:AbortSignal):Promise<WorkflowResult>{
  const events:{call:unknown;result:unknown}[]=[];let invalid=0;
- const chars=Array.from(context.text),brief={...context,sources:context.sources?.map(s=>({id:s.id,chars:Array.from(s.text).length,preview:Array.from(s.text).slice(0,160).join('')})),text:chars.slice(0,12000).join(''),sourceChars:chars.length,sourceTruncated:chars.length>12000};
+ const chars=Array.from(context.text),shown=maskSafeEnd(chars,12000),brief={...context,sources:context.sources?.map(s=>{const c=Array.from(s.text);return {id:s.id,chars:c.length,preview:c.slice(0,maskSafeEnd(c,160)).join('')};}),text:chars.slice(0,shown).join(''),sourceChars:chars.length,sourceTruncated:chars.length>shown};
  const initial=draft?.read()??{open:false,nodes:[]};
  for(let step=0;step<24;step++){
   stopped(signal);host.progress(step?'문서를 확인하며 작업하고 있습니다':'문서와 요청을 확인하고 있습니다');
@@ -53,7 +54,7 @@ export async function runWorkflow(context:WorkflowContext,draft:WorkflowDraft|nu
   }
   try{
    let result:unknown;
-   if(call.tool==='source'){const offset=call.offset??0,source=call.messageId?context.sources?.find(s=>s.id===call.messageId):undefined;if(call.messageId&&!source)throw Error('이전 원문을 찾지 못했습니다. 내용을 추측하지 말고 다시 요청하세요.');const content=source?Array.from(source.text):chars;result={text:content.slice(offset,offset+12000).join(''),offset,nextOffset:offset+12000<content.length?offset+12000:null,total:content.length};}
+   if(call.tool==='source'){const offset=call.offset??0,source=call.messageId?context.sources?.find(s=>s.id===call.messageId):undefined;if(call.messageId&&!source)throw Error('이전 원문을 찾지 못했습니다. 내용을 추측하지 말고 다시 요청하세요.');const content=source?Array.from(source.text):chars,end=maskSafeEnd(content,offset+12000);result={text:content.slice(offset,end).join(''),offset,nextOffset:end<content.length?end:null,total:content.length};}
    else if(call.tool==='fonts'){if(!host.fonts)throw Error('설치된 글꼴 조회가 연결되지 않았습니다.');const key=(s:string)=>s.normalize('NFKC').replace(/\s/gu,'').toLocaleLowerCase();const names=(await host.fonts()).filter(n=>!call.query||key(n).includes(key(call.query))),offset=call.offset??0;result={families:names.slice(offset,offset+80),total:names.length,nextOffset:offset+80<names.length?offset+80:null};}
    else if(!draft)throw Error('열린 문서가 없습니다. 답변하거나 새 문서 작업을 선택하세요.');
    else if(call.tool==='read')result=draft.read(call);

@@ -46,6 +46,12 @@ zeroize = "1"
 # Use upstream's vendored svg2pdf fixes for deterministic ordering and PDF rendering.
 svg2pdf = { path = "../../../third_party/rhwp/vendor/svg2pdf" }
 
+[profile.release]
+# Smaller installers at the same optimisation level: whole-program LTO, one code unit, no symbol tables.
+lto = true
+codegen-units = 1
+strip = "symbols"
+
 [target.'cfg(windows)'.dependencies]
 winreg = "0.10"
 

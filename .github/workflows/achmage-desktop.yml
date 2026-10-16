@@ -198,7 +198,8 @@ jobs:
             ln -s /Applications "$stage/Applications"
             dmg="$bundle/dmg/Achmage HOP_${version}_${arch}.dmg"
             for attempt in 1 2 3 4 5; do
-              if hdiutil create -volname "Achmage HOP" -srcfolder "$stage" -ov -format UDZO "$dmg"; then break; fi
+              # ULFO (lzfse) opens on macOS 10.11 and later; the app needs 12.0.
+              if hdiutil create -volname "Achmage HOP" -srcfolder "$stage" -ov -format ULFO "$dmg"; then break; fi
               if [[ "$attempt" == 5 ]]; then exit 1; fi
               echo "hdiutil create failed (attempt $attempt); retrying"; sleep $((attempt * 15))
             done

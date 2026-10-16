@@ -210,7 +210,8 @@ export async function ensureDesktopFontsAvailable(
 
   const requested = resolveRequestedFamilies(entries, targetFamilies);
   const groups = groupEntriesByPath(entries.filter((entry) =>
-    entry.sourceKind === 'file-backed' && Boolean(entry.path) && requested.has(entry.family),
+    (entry.sourceKind === 'file-backed' || isAuthoringBlockedFontFamily(entry.family))
+      && Boolean(entry.path) && requested.has(entry.family),
   ));
   await Promise.all([...groups].map(async ([path, pathEntries]) => {
     if (pathEntries.every((entry) => loadedFontFaces.get(fontEntryKey(entry))?.face)) {

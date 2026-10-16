@@ -33,6 +33,14 @@ describe('authorized local font lifecycle', () => {
     expect(fonts.getDesktopFonts()).not.toContain(entry.family);
   });
 
+  it('loads an installed protected face from verified bytes on Linux before authoring', async () => {
+    const {add}=environment();const system={...entry,family:'HY신명조',sourceKind:'system-installed',path:'/home/test/.local/share/fonts/H2MJSM.TTF'};
+    invoke.mockImplementation(async(name:string)=>name==='list_local_fonts'?[system]:[0,1,2,3]);
+    const fonts=await import('./desktop-local-fonts');const policy=await import('./font-authoring-policy');
+    await fonts.detectDesktopFontEntries();expect(policy.isAuthoringBlockedFontFamily(system.family)).toBe(true);
+    expect(await fonts.ensureDesktopFontsAvailable([system.family])).toContain(system.family);expect(add).toHaveBeenCalledTimes(1);expect(policy.isAuthoringBlockedFontFamily(system.family)).toBe(false);
+  });
+
   it('allows only the successfully registered family and revokes it on reset', async () => {
     const { add, remove } = environment();
     const fonts = await import('./desktop-local-fonts');

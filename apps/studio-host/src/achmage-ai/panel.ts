@@ -65,6 +65,7 @@ export interface PanelOptions { workflow?:boolean; router?: boolean; /** At laun
 const CATALOG_PROVIDERS=new Set<ProviderId>(['openai','claude','gemini']);
 export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeTransport, panelOptions: PanelOptions = {}): () => void {
   const workflowEnabled=panelOptions.workflow!==false;
+  let workflowSources:{id:string;text:string}[]=[];
   let workflowAbort:AbortController|null=null,workflowClient:WorkflowModelClient|undefined,retainedSelection:Capture|undefined;
   let lastWorkflow:{identity:string;summary:string}|undefined;
   const routerEnabled = panelOptions.router !== false;
@@ -103,7 +104,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   /** The provider chosen in an earlier session, selected again once it is available (first 20 s after launch). */
   let savedProvider: ProviderId | null = null; const providerRestoreUntil = panelOptions.restoreSignIn === false ? 0 : Date.now() + 20_000, restoreChecked = new Set<ProviderId>();
   try { savedProvider = loadProvider(localStorage); } catch { savedProvider = null; }
-  try { history = loadHistory(localStorage); const saved = localStorage.getItem(PANEL_WIDTH_KEY); if (saved !== null) width = panelWidth(Number(saved)); } catch { /* unavailable storage keeps a working in-memory session */ }
+  try { history = workflowEnabled?[]:loadHistory(localStorage); const saved = localStorage.getItem(PANEL_WIDTH_KEY); if (saved !== null) width = panelWidth(Number(saved)); } catch { /* unavailable storage keeps a working in-memory session */ }
   type RouterPlan = { text: string; template?: DocumentTemplate; card: DocumentStateCard; templates: TemplateOffer[]; document: string; selection: string };
   let request: { id: string; payload: string; mask?: MaskedText; failed?: boolean; completedAt?: number; routedMs?: number; lastTextLength?: number; lastTextAt?: number; model?: string; effort?: string; router?: RouterPlan; capture?: Capture; structured?: StructuredCapture; kordoc?: string; blockPatch?: { blocks: string[] }; local?: boolean; inPlace?: { identity: RhwpDocumentStateV1; hideFirstPage: boolean; toc?: boolean }; styleContext?: DocumentTemplate; notices?: string[]; startedAt: number; firstTextAt?: number; session: string; provider: ProviderId; completed: boolean; stale: boolean } | null = null;
   /** The AI only hears turns after this point; '새 대화 시작' moves it. Plain answers can be inserted as-is. */
@@ -274,7 +275,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     let writingTemplate:DocumentTemplate|undefined;try{writingTemplate=documentTemplates?.current();}catch{/* send shows the actionable storage error */}
     // The hint is the same route send() takes, so the user sees what will change before sending.
     const typed=!!prompt.value.trim()&&signed;
-    const hintRoute=typed&&(mode.checked||!routerEnabled)?classifyRequest(routeInput(prompt.value,{captured:false,whole:false,template:!!writingTemplate})):null;
+    const hintRoute=!workflowEnabled&&typed&&(mode.checked||!routerEnabled)?classifyRequest(routeInput(prompt.value,{captured:false,whole:false,template:!!writingTemplate})):null;
     q('.achmage-writing-hint').hidden = !typed;
     q('.achmage-writing-hint').textContent=hintRoute?describeRoute(hintRoute,prompt.value,writingTemplate?.name):typed?`AI가 요청을 판단합니다${deps.input?.getSelection()?' · 선택 영역 기준':''}${writingTemplate?' · 서식 '+writingTemplate.name:''} · 문서를 바꾸면 Ctrl+Z로 되돌리기`:'';
     q('.achmage-writing-hint').dataset.route=hintRoute?.kind??(typed?'router':'');
@@ -283,7 +284,8 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     for (const item of panel.querySelectorAll<HTMLElement>('[data-provider-tool]')) item.hidden = item.dataset.providerTool !== state?.selectedProvider;
     button('clear-history').disabled = locked || !!running;
     button('new-conversation').disabled = locked || !!running;
-    q<HTMLSelectElement>('.achmage-provider-switch').disabled = locked || state?.busy === true || composing;
+    button('restore-history').disabled=locked||!!running||history.length>0;
+    q<HTMLSelectElement>('.achmage-provider-switch').disabled = !!workflowAbort || locked || state?.busy === true || composing;
     const currentTurn = request && sameAuthSession(state, request.session) && state?.turn?.requestId === request.id;
     q('.achmage-answer').hidden = !currentTurn || !!request?.completed || !!request?.structured || !!request?.kordoc || !state?.turn?.text || !!request?.router && looksLikeRouterAction(state.turn.text);
     q('.achmage-answer').textContent = currentTurn && !request?.structured && !request?.kordoc && !(request?.router && looksLikeRouterAction(state?.turn?.text || '')) ? restoredReply(request, state?.turn?.text || '').text : '';
@@ -472,17 +474,17 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     const controller=new AbortController();workflowAbort=controller;choices=null;request=null;
     const requestDocument=generationIdentity();let draft:WorkflowDraft|null=null;
     const prior=conversationContext(history.map(e=>({...e,provider:state.selectedProvider})),state.selectedProvider,contextFrom);
-    const id=crypto.randomUUID();remember({id,provider:state.selectedProvider,role:'user',text,at:Date.now()});if(clearPrompt)prompt.value='';
+    const id=crypto.randomUUID();workflowSources.push({id,text});remember({id,provider:state.selectedProvider,role:'user',text,at:Date.now()});if(clearPrompt)prompt.value='';
     try{
       let selection=captured;
       if(!selection)try{selection=doc.captureSelection();}catch{selection=retainedSelection;}
       if(selection?.multi&&generationIdentity()!==JSON.stringify([selection.multi.identity.documentEpoch,selection.multi.identity.changeSeq,selection.multi.identity.documentSha256]))selection=undefined;
       if(deps.wasm.pageCount>0)draft=new WorkflowDraft(deps.wasm,doc.identity(),selection?.multi);
       const actions=['write_new_document','restyle_document','refresh_toc','recompose_document','insert_at_caret','insert_answer','undo'];
-      const result=await runWorkflow({text,history:prior,selection:selection?{text:selection.before}:null,templates:templateOffers(template),actions,recent:lastWorkflow?.identity===requestDocument?lastWorkflow.summary:undefined},draft,{
+      const result=await runWorkflow({text,history:prior,sources:workflowSources,selection:selection?{text:selection.before,exact:!!selection.multi}:null,focus:draft?.map.focus(deps.input.getCursorPosition()),templates:templateOffers(template),actions,recent:lastWorkflow?.identity===requestDocument?lastWorkflow.summary:undefined},draft,{
         ask:(payload,signal)=>workflowClient!.ask(payload,signal,{model:q<HTMLSelectElement>('.achmage-model').value||undefined,...(state.selectedProvider==='openai'?{reasoningEffort:q<HTMLSelectElement>('.achmage-effort').value||undefined}:{})}),
         progress:label=>{message(label,'info');render();},
-        commit:async d=>{if(controller.signal.aborted||!sameAuthSession(connection.current,session)||generationIdentity()!==requestDocument)throw Error('문서나 계정이 바뀌어 적용하지 않았습니다. 다시 요청하세요.');applying=true;render();try{return await d.commit(doc);}finally{applying=false;}},
+        commit:async d=>{if(d.fonts.length){const available=await ensureDesktopFontsAvailable(d.fonts);if(d.fonts.some(f=>!available.has(f)))throw Error('요청한 글꼴을 이 컴퓨터에서 찾지 못했습니다.');}if(controller.signal.aborted||!sameAuthSession(connection.current,session)||generationIdentity()!==requestDocument)throw Error('문서나 계정이 바뀌어 적용하지 않았습니다. 다시 요청하세요.');applying=true;render();try{return await d.commit(doc);}finally{applying=false;}},
         action:async call=>{
           if(!actions.includes(call.action))throw Error('현재 지원하는 작업이 아닙니다.');
           if(controller.signal.aborted||generationIdentity()!==requestDocument||!sameAuthSession(connection.current,session))throw Error('문서나 계정이 바뀌었습니다.');
@@ -798,7 +800,8 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     if (!Object.values(saved).some(value => value)) { message('저장된 내 정보가 없습니다.', 'info'); return; }
     void navigator.clipboard.writeText(JSON.stringify(saved, null, 2)).then(() => message('저장된 내 정보를 JSON으로 클립보드에 복사했습니다.', 'info'), () => message('클립보드에 복사하지 못했습니다.'));
   };
-  button('new-conversation').onclick = () => { if (workflowAbort || connection.busy || connection.current?.busy || connection.current?.turn?.status === 'running' || applying) return; history = []; contextFrom = 0; lastWorkflow=undefined;retainedSelection=undefined;request = null; prompt.value = ''; try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch { /* memory reset still works */ } lastAnswer = undefined; lastApplied = undefined; choices = null; q('.achmage-account-menu').hidden = true; message('새 대화를 시작했습니다. 문서와 계정 연결은 유지됩니다.', 'info'); render(); };
+  button('new-conversation').onclick = () => { if (workflowAbort || connection.busy || connection.current?.busy || connection.current?.turn?.status === 'running' || applying) return; history = [];workflowSources=[]; contextFrom = 0; lastWorkflow=undefined;retainedSelection=undefined;request = null; prompt.value = ''; try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch { /* memory reset still works */ } lastAnswer = undefined; lastApplied = undefined; choices = null; q('.achmage-account-menu').hidden = true; message('새 대화를 시작했습니다. 문서와 계정 연결은 유지됩니다.', 'info'); render(); };
+  button('restore-history').onclick=()=>{if(workflowAbort||applying||connection.current?.busy||history.length)return;history=loadHistory(localStorage);contextFrom=0;message(history.length?'이전 대화를 불러왔습니다. 현재 문서를 다시 확인하며 이어갑니다.':'저장된 대화가 없습니다.','info');render();};
   button('clear-history').onclick = () => { if (confirm('이 기기에 보관된 모든 제공자의 대화를 지울까요? 문서는 바뀌지 않습니다.')) { history = []; try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch { /* memory still cleared */ } render(); } };
   button('account').onclick = () => { const element = q('.achmage-account-menu'); element.hidden = !element.hidden; button('account').setAttribute('aria-expanded', String(!element.hidden)); };
   button('tools').onclick = () => { const element = q('.achmage-more'); element.hidden = !element.hidden; button('tools').setAttribute('aria-expanded', String(!element.hidden)); };

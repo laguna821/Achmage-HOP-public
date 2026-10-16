@@ -55,7 +55,7 @@ const btn=(name:string)=>q(`[data-action="${name}"]`);
 const event=(type:string,props:Record<string,unknown>={})=>Object.assign(new Event(type,{cancelable:true}),props);
 beforeEach(()=>{vi.useFakeTimers();dom=new TestDocument();state=base();documentGuard.current=true;documentGuard.blank=false;documentGuard.applyWhole.mockReset().mockResolvedValue({paragraphs:3,removedLayout:['foot']});fontGuard.available.mockReset().mockResolvedValue(new Set(['함초롬바탕']));documentGuard.apply.mockReset().mockResolvedValue(undefined);documentGuard.applyStructured.mockReset().mockResolvedValue(undefined);const store=new Map<string,string>();vi.stubGlobal('document',dom);vi.stubGlobal('window',Object.assign(new EventTarget(),{setInterval,clearInterval}));vi.stubGlobal('localStorage',{getItem:(k:string)=>store.get(k)??null,setItem:(k:string,v:string)=>store.set(k,v),removeItem:(k:string)=>store.delete(k)});vi.stubGlobal('confirm',()=>true);action=vi.fn(async(_generation:number,change:AiAction)=>{state={...state,generation:state.generation+1};if(change.type==='send')state={...state,turn:{id:change.requestId,requestId:change.requestId,status:'running'}};if(change.type==='begin_login')state={...state,busy:true,auth:{status:'pending'}};return state;});});
 afterEach(()=>{stop?.();vi.useRealTimers();vi.unstubAllGlobals();});
-async function start(pageCount=1,options:PanelOptions={router:false,restoreSignIn:false},input?:unknown){const wasm={pageCount};stop=installAiPanel({wasm,input,eventBus:{on:()=>()=>{}},undo:vi.fn()} as unknown as PanelDeps,{state:async()=>state,action},{...options,workflow:false});await flush();return wasm;}
+async function start(pageCount=1,options:PanelOptions={router:false,restoreSignIn:false},input?:unknown){const wasm={pageCount};stop=installAiPanel({wasm,input,eventBus:{on:()=>()=>{}},undo:vi.fn()} as unknown as PanelDeps,{state:async()=>state,action},{workflow:false,...options});await flush();return wasm;}
 describe('actual AI panel handlers',()=>{
   beforeEach(()=>{templateGuard.current=undefined;kordocGuard.prepare.mockReset().mockResolvedValue(['함초롬바탕']);kordocGuard.create.mockReset().mockResolvedValue({pages:3,warnings:[]});wholeGuard.capture.mockReset().mockReturnValue({sections:[{index:0,paragraphs:[{index:0,text:'열린 문서의 고유 본문',tables:[]},{index:1,text:'',tables:[{controlIndex:0,charOffset:0,rowCount:1,colCount:2,cells:[{index:0,row:0,col:0,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'안건'}]},{index:1,row:0,col:1,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'검토'}]}]}]}]}],paragraphs:4,tables:1,chars:15});});
   it('sends long Korean requests intact through routing and document authoring',async()=>{
@@ -505,4 +505,14 @@ describe('model-routed chat messages',()=>{
     await start(1,{});q('.achmage-edit-mode').checked=true;await ask('더 간결하게 고쳐줘');
     expect(sentAt(0).prompt).not.toContain('[HOP 요청 해석]');expect(sentAt(0).prompt).toContain('선택 본문');
   });
+});
+describe('common workflow panel',()=>{
+ it('starts fresh, restores only explicitly, answers through the common transport, then resets',async()=>{
+  localStorage.setItem(CHAT_STORAGE_KEY,JSON.stringify([{id:'old',provider:'openai',role:'user',text:'옛날 비밀 과목',at:1}]));
+  await start(0,{workflow:true,restoreSignIn:false});expect(q('.achmage-history').children).toHaveLength(0);
+  await btn('restore-history').click();expect(q('.achmage-history').children.length).toBe(1);await btn('new-conversation').click();
+  q('.achmage-prompt').value='안녕';q('.achmage-prompt').dispatchEvent(event('input'));const pending=btn('send').click();await flush();const sent=sentRequest();expect(sent.prompt).not.toContain('옛날 비밀 과목');expect(sent.prompt).toContain('도구');
+  state={...state,generation:state.generation+1,turn:{id:sent.requestId,requestId:sent.requestId,status:'completed',text:'{"tool":"answer","text":"안녕하세요"}'}};await vi.advanceTimersByTimeAsync(1500);await pending;
+  expect(q('.achmage-message').textContent).toBe('안녕하세요');expect(q('.achmage-history').children.length).toBe(2);await btn('new-conversation').click();expect(q('.achmage-history').children).toHaveLength(0);
+ });
 });

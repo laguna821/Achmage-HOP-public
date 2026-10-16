@@ -1,7 +1,8 @@
+import {checkboxTargets} from '../checkbox-edit';
 import type { WasmBridge } from '@/upstream/core';
 export type Handle = NonNullable<ReturnType<WasmBridge['borrowDocumentHandle']>>;
 export interface Address { section:number; paragraph:number; control?:number; cell?:number; cellParagraph?:number }
-export interface DocNode { id:string; kind:'paragraph'|'cell'|'table'; address:Address; text:string; parent?:string; row?:number; col?:number; rows?:number; cols?:number; rowSpan?:number; colSpan?:number }
+export interface DocNode { id:string; kind:'paragraph'|'cell'|'table'|'checkbox'; formKey?:string; checked?:boolean; address:Address; text:string; parent?:string; row?:number; col?:number; rows?:number; cols?:number; rowSpan?:number; colSpan?:number }
 export interface ReadRequest { ids?:string[]; query?:string; offset?:number; start?:number }
 export const parse = <T>(v:string):T => JSON.parse(v) as T;
 const integer=(n:number,max=1_000_000)=>{if(!Number.isSafeInteger(n)||n<0||n>max)throw Error('문서 주소를 확인하지 못했습니다.');return n;};
@@ -30,8 +31,18 @@ export class DocumentMap {
     }
    }
   }
+  try{for(const t of checkboxTargets(bridgeFor(engine))){const address={section:t.sec!,paragraph:t.inCell?t.tablePara!:t.para!,control:t.inCell?t.tableCi!:t.ci!,...(t.inCell?{cell:t.cellIdx!,cellParagraph:t.cellPara!}:{})};const parent=this.nodes.find(n=>n.kind==='table'&&n.address.section===address.section&&n.address.paragraph===address.paragraph&&n.address.control===address.control)?.id;
+   this.add({kind:'checkbox',address,parent,text:t.caption||t.name||'체크박스',checked:t.value===1,formKey:JSON.stringify([t.sec,t.para,t.ci,t.inCell,t.tablePara,t.tableCi,t.cellIdx,t.cellPara])});
+  }}catch{this.warnings.push('일부 양식 개체의 상태를 읽지 못했습니다. 체크 상태를 추정하지 마세요.');}
+
  }
  private add(n:Omit<DocNode,'id'>):DocNode {const node={...n,id:`${this.revision}:${this.nodes.length}`};this.nodes.push(node);return node;}
+ focus(p:{sectionIndex:number;paragraphIndex:number;parentParaIndex?:number;controlIndex?:number;cellIndex?:number;cellParaIndex?:number;cellPath?:unknown[];isTextBox?:boolean}){
+  if(p.isTextBox||(p.cellPath?.length??0)>1)return {unknown:true};
+  const cell=p.cellIndex!==undefined||p.parentParaIndex!==undefined;
+  const node=this.nodes.find(n=>n.kind===(cell?'cell':'paragraph')&&n.address.section===p.sectionIndex&&n.address.paragraph===(cell?p.parentParaIndex:p.paragraphIndex)&&(!cell||n.address.control===p.controlIndex&&n.address.cell===p.cellIndex&&n.address.cellParagraph===(p.cellParaIndex??p.paragraphIndex)));
+  return node?{id:node.id,kind:node.kind,parent:node.parent}: {unknown:true};
+ }
  get(id:string):DocNode {const n=this.nodes.find(n=>n.id===id);if(!n)throw Error('오래되거나 알 수 없는 대상입니다. 문서를 다시 읽으세요.');return n;}
  target(id:string):DocNode {const n=this.get(id);if(!this.observed.has(id))throw Error('내용을 아직 읽지 않은 대상입니다. read로 먼저 확인하세요.');return n;}
  read(req:ReadRequest={}) {
@@ -45,7 +56,7 @@ export class DocumentMap {
    const intervals=[...(this.coverage.get(n.id)??[]),[Math.min(start,chars.length),Math.min(chars.length,start+Array.from(text).length)] as [number,number]].sort((a,b)=>a[0]-b[0]);
    let end=0;for(const [a,b] of intervals){if(a>end)break;end=Math.max(end,b);}this.coverage.set(n.id,intervals);
    const complete=end>=chars.length;if(complete)this.observed.add(n.id);
-   nodes.push({...n,address:undefined,text,chars:chars.length,complete,...(!complete?{nextStart:start+Array.from(text).length}:{})});
+   nodes.push({...n,address:undefined,formKey:undefined,text,chars:chars.length,complete,...(!complete?{nextStart:start+Array.from(text).length}:{})});
    budget-=text.length+120;if(budget<=0)break;
   }
   return {revision:this.revision,total:chosen.length,offset,nodes,nextOffset:offset+nodes.length<chosen.length?offset+nodes.length:null,warnings:this.warnings};

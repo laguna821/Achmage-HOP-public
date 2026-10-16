@@ -5,11 +5,11 @@ import type {WasmBridge} from '@/upstream/core';
 import {parseTextFormat,textFormatMods,type TextFormat} from '../text-format';
 import {bridgeFor,DocumentMap,type DocNode,type Handle} from './document-map';
 export interface TextChange {id:string;text:string;before?:string}
-export type PreparedOperation=ControlOperation|{kind:'selection';range:import('../multi-range').MultiRange;text:string}|{kind:'edit';nodes:{node:DocNode;text:string}[]}|{kind:'format';nodes:DocNode[];format:TextFormat};
+export type PreparedOperation=ControlOperation|{kind:'selection_format';range:import('../multi-range').MultiRange;format:TextFormat}|{kind:'selection';range:import('../multi-range').MultiRange;text:string}|{kind:'edit';nodes:{node:DocNode;text:string}[]}|{kind:'format';nodes:DocNode[];format:TextFormat};
 const identity={} as RhwpDocumentStateV1;
 function capture(w:WasmBridge,n:DocNode){
  const a=n.address,length=Array.from(n.text).length;
- if(n.kind==='table')throw Error('표 전체를 글로 덮어쓸 수 없습니다. 셀을 지정하세요.');
+ if(n.kind==='table'||n.kind==='checkbox')throw Error('표 전체를 글로 덮어쓸 수 없습니다. 셀을 지정하세요.');
  if(n.kind==='cell')return captureCellRange(w,identity,{section:a.section,parent:a.paragraph,control:a.control!,cell:a.cell!},{paragraph:a.cellParagraph!,offset:0},{paragraph:a.cellParagraph!,offset:length});
  return captureMultiRange(w,identity,{sectionIndex:a.section,paragraphIndex:a.paragraph,charOffset:0},{sectionIndex:a.section,paragraphIndex:a.paragraph,charOffset:length});
 }
@@ -20,7 +20,7 @@ export function prepareText(map:DocumentMap,changes:TextChange[]):PreparedOperat
  const nodes=changes.map(c=>{
   if(typeof c.id!=='string'||typeof c.text!=='string'||c.text.includes('\u0000'))throw Error('편집 값이 올바르지 않습니다.');
   if(seen.has(c.id))throw Error('같은 대상이 중복되었습니다.');seen.add(c.id);
-  const node=map.target(c.id);let text=c.text.replace(/\r\n?/g,'\n');
+  const node=map.target(c.id);if(node.kind==='checkbox'||node.kind==='table')throw Error('글이 아닌 개체는 전용 도구를 사용하세요.');let text=c.text.replace(/\r\n?/g,'\n');
   if(c.before!==undefined){if(typeof c.before!=='string'||!c.before||node.text.split(c.before).length!==2)throw Error('교체할 원문이 없거나 여러 곳에 있습니다.');text=node.text.replace(c.before,()=>text);}
   return {node:structuredClone(node),text};
  });
@@ -35,6 +35,15 @@ export function prepareFormat(map:DocumentMap,ids:string[],format:unknown):Prepa
 export function executePrepared(engine:Handle,op:PreparedOperation):void {
  if(op.kind==='table'||op.kind==='checkbox'){executeControl(engine,op);return;}
  const w=bridgeFor(engine);
+ if(op.kind==='selection_format'){
+  const m=op.range,s=m.start.sectionIndex,before=engine.getTextFileUnicode(),controls=engine.getControls(),mods=textFormatMods(op.format,family=>Array.from({length:7},(_,lang)=>engine.findOrCreateFontIdForLang(lang,family)));
+  for(let p=m.start.paragraphIndex;p<=m.end.paragraphIndex;p++){
+   const length=Array.from(m.paragraphs[p].text).length,lo=p===m.start.paragraphIndex?m.start.charOffset:0,hi=p===m.end.paragraphIndex?m.end.charOffset:length;if(hi<=lo)continue;
+   const raw=m.cell?engine.applyCharFormatInCell(s,m.cell.parent,m.cell.control,m.cell.cell,p,lo,hi,mods):engine.applyCharFormat(s,p,lo,hi,mods);if(JSON.parse(raw).ok!==true)throw Error('선택 범위 서식을 바꾸지 못했습니다.');
+  }
+  if(engine.getTextFileUnicode()!==before||engine.getControls()!==controls)throw Error('서식 변경 중 내용이 바뀌었습니다.');return;
+ }
+
  if(op.kind==='selection'){executeMultiRange(w,op.range,op.text);return;}
  if(op.kind==='edit'){
   // Preflight every source before the first mutation. A failed operation is discarded/rolled back by the owner.

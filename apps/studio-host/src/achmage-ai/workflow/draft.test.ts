@@ -40,3 +40,6 @@ it('keeps partial selection boundaries exactly, including emoji',async()=>{
  const h=historyHarness(bodyDocument(['앞😀 선택 뒤','보존']));h.select(0,3,0,6);const c=h.adapter.captureSelection();
  const d=new WorkflowDraft(h.wasm,h.adapter.identity(),c.multi);try{d.editSelection('수정');await d.commit(h.adapter);expect(h.native.getTextRange(0,0,0,h.native.getParagraphLength(0,0))).toBe('앞😀 수정뒤');h.undo();expect(h.native.getTextFileUnicode()).toContain('앞😀 선택 뒤');}finally{d.close();h.close();}
 });
+it('formats only selected characters and preserves adjacent text and font',async()=>{
+ const h=historyHarness(bodyDocument(['앞 선택 뒤']));h.select(0,2,0,4);const d=new WorkflowDraft(h.wasm,h.adapter.identity(),h.adapter.captureSelection().multi);try{const before=JSON.parse(h.native.getCharPropertiesAt(0,0,0));d.formatSelection({bold:true});await d.commit(h.adapter);expect(JSON.parse(h.native.getCharPropertiesAt(0,0,2)).bold).toBe(true);expect(JSON.parse(h.native.getCharPropertiesAt(0,0,0))).toEqual(before);expect(h.native.getTextFileUnicode()).toContain('앞 선택 뒤');h.undo();expect(JSON.parse(h.native.getCharPropertiesAt(0,0,2)).bold).toBe(false);}finally{d.close();h.close();}
+});

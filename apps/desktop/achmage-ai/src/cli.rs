@@ -83,7 +83,8 @@ impl CliHost {
         if state["busy"]==true || state["auth"]["status"]!="signed_in" { return Err("Google 연결을 먼저 확인하세요.".into()); }
         let selected=choose_google_model(state["models"].as_array().ok_or("모델 목록이 없습니다.")?,model)?;
         let account=state["auth"]["sessionGeneration"].clone();
-        let conversation=state["conversationId"].as_str().map(str::to_owned);
+        // The host sends explicit conversation context. A provider-side thread would leak previous app sessions.
+        let conversation=None;
         state["turn"]=json!({"id":request_id,"requestId":request_id,"status":"running","text":""});state["busy"]=json!(true);state["notice"]=Value::Null;
         self.cancelled=Arc::new(AtomicBool::new(false));
         let (exe,cwd,shared,cancel)=(self.executable.clone(),self.cwd.clone(),self.state.clone(),self.cancelled.clone());

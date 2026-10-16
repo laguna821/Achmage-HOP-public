@@ -1,3 +1,4 @@
+import {parseTextFormat} from '../text-format';
 import {prepareControl} from './controls';
 import type {ToolCall} from './protocol';
 import type {AiDocument} from '../document';
@@ -24,11 +25,13 @@ export class WorkflowDraft {
  format(ids:string[],format:unknown) {return this.stage(prepareFormat(this.map,ids,format));}
  control(call:ToolCall){return this.stage(prepareControl(this.map,call));}
  private stage(op:PreparedOperation){
-  this.assertOpen();const snapshot=this.engine.saveSnapshot();
+  this.assertOpen();if(op.kind==='checkbox'&&op.changed===0||op.kind==='edit'&&op.nodes.every(n=>n.text===n.node.text))return {staged:false,changed:0,message:'이미 요청한 상태입니다.'};const snapshot=this.engine.saveSnapshot();
   try{executePrepared(this.engine,op);const map=new DocumentMap(this.engine,`${this.id}.${this.sequence+1}`);this.operations.push(op);this.sequence++;this.map=map;return {staged:true,operationCount:this.operations.length,revision:this.map.revision,message:'임시본에서 검증했습니다. finish 전에는 원문이 바뀌지 않습니다.'};}
   catch(error){this.engine.restoreSnapshot(snapshot);throw error;}finally{this.engine.discardSnapshot(snapshot);}
  }
  editSelection(text:string){if(!this.selected)throw Error('선택 범위가 없습니다. read로 항목을 찾거나 사용자에게 어느 부분인지 물어보세요.');if(this.operations.length)throw Error('선택은 작업 시작 시점의 범위입니다. 다른 변경 뒤에는 새 문서 ID로 편집하세요.');return this.stage({kind:'selection',range:structuredClone(this.selected),text});}
+ formatSelection(format:unknown){if(!this.selected||this.operations.length)throw Error('유효한 처음 선택 범위가 필요합니다. read로 대상을 확인하세요.');return this.stage({kind:'selection_format',range:structuredClone(this.selected),format:parseTextFormat(format)});}
+ get fonts(){return [...new Set(this.operations.flatMap(op=>(op.kind==='format'||op.kind==='selection_format')&&op.format.fontFamily?[op.format.fontFamily]:[]))];}
  get pending(){return this.operations.length;}
  async commit(doc:AiDocument){
   this.assertOpen();if(this.committed)throw Error('이미 반영한 요청입니다.');
@@ -40,7 +43,7 @@ export class WorkflowDraft {
    if(new DocumentMap(engine,'verify').fingerprint()!==expected)throw Error('실제 편집 결과가 검증한 임시본과 다릅니다.');
   });
   this.committed=true;
-  return {changed:operations.reduce((n,op)=>n+(op.kind==='checkbox'?op.changed:op.kind==='selection'||op.kind==='table'?1:op.nodes.length),0),message:'요청한 변경을 반영하고 결과를 확인했습니다. Ctrl+Z 한 번으로 되돌릴 수 있습니다.'};
+  return {changed:operations.reduce((n,op)=>n+(op.kind==='checkbox'?op.changed:op.kind==='selection'||op.kind==='selection_format'||op.kind==='table'?1:op.nodes.length),0),message:'요청한 변경을 반영하고 결과를 확인했습니다. Ctrl+Z 한 번으로 되돌릴 수 있습니다.'};
  }
  private assertOpen(){if(this.closed)throw Error('종료된 작업입니다. 다시 요청하세요.');}
  close(){if(!this.closed){this.closed=true;this.engine.free();}}

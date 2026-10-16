@@ -19,3 +19,9 @@ describe('document inspection',()=>{
   }finally{d.free();}
  });
 });
+it('allows a long target only after every page has actually been read',()=>{
+ const d=new HwpDocument(bodyDocument(['가'.repeat(10_000)]));try{const m=new DocumentMap(d,'v'),id=m.read().nodes[0].id;for(const start of [9000,3000])m.read({ids:[id],start});expect(()=>m.target(id)).toThrow();m.read({ids:[id],start:6000});expect(m.target(id).text.length).toBe(10000);}finally{d.free();}
+});
+it('reads all 400 cells without the former 256-cell rejection',()=>{
+ const d=new HwpDocument(bodyDocument(['']));try{d.createTable(0,0,0,100,4);const m=new DocumentMap(d,'v');let offset:number|null=0,seen=0;while(offset!==null){const page=m.read({offset});seen+=page.nodes.filter(n=>n.kind==='cell').length;offset=page.nextOffset;}expect(seen).toBe(400);}finally{d.free();}
+});

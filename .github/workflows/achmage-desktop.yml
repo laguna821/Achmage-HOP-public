@@ -203,7 +203,12 @@ jobs:
               if [[ "$attempt" == 5 ]]; then exit 1; fi
               echo "hdiutil create failed (attempt $attempt); retrying"; sleep $((attempt * 15))
             done
-            hdiutil verify "$dmg"
+            # Right after creation the image can still be busy ("Resource temporarily unavailable"): retry the check.
+            for attempt in 1 2 3 4 5; do
+              if hdiutil verify "$dmg"; then break; fi
+              if [[ "$attempt" == 5 ]]; then exit 1; fi
+              echo "hdiutil verify could not read the image yet (attempt $attempt); retrying"; sleep $((attempt * 10))
+            done
           fi
 
       - name: Collect bundle

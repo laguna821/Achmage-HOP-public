@@ -58,14 +58,6 @@ afterEach(()=>{stop?.();vi.useRealTimers();vi.unstubAllGlobals();});
 async function start(pageCount=1,options:PanelOptions={router:false,restoreSignIn:false},input?:unknown){const wasm={pageCount};stop=installAiPanel({wasm,input,eventBus:{on:()=>()=>{}},undo:vi.fn()} as unknown as PanelDeps,{state:async()=>state,action},options);await flush();return wasm;}
 describe('actual AI panel handlers',()=>{
   beforeEach(()=>{templateGuard.current=undefined;kordocGuard.prepare.mockReset().mockResolvedValue(['함초롬바탕']);kordocGuard.create.mockReset().mockResolvedValue({pages:3,warnings:[]});wholeGuard.capture.mockReset().mockReturnValue({sections:[{index:0,paragraphs:[{index:0,text:'열린 문서의 고유 본문',tables:[]},{index:1,text:'',tables:[{controlIndex:0,charOffset:0,rowCount:1,colCount:2,cells:[{index:0,row:0,col:0,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'안건'}]},{index:1,row:0,col:1,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'검토'}]}]}]}]}],paragraphs:4,tables:1,chars:15});});
-  it.each(['네 능력을 시험해보자. 지금 연 문서에서 체크박스를 전부 해제해봐','네 능력을 시험해보자. 이 한글 문서의 모든 체크박스를 해제해봐'])('clears checkboxes locally: %s',async(text)=>{
-    documentGuard.clearCheckboxes.mockClear();await start(1,{router:true,restoreSignIn:false});
-    q('.achmage-prompt').value=text;q('.achmage-prompt').dispatchEvent(event('input'));
-    await btn('send').click();await flush();
-    expect(documentGuard.clearCheckboxes).toHaveBeenCalledOnce();
-    expect(action.mock.calls.filter(([,a])=>a.type==='send')).toHaveLength(0);
-    expect(kordocGuard.prepare).not.toHaveBeenCalled();
-  });
   it('sends long Korean requests intact through routing and document authoring',async()=>{
     templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[0]);
     await start(0,{});
@@ -360,6 +352,15 @@ describe('model-routed chat messages',()=>{
   const ask=async(text:string)=>{q('.achmage-prompt').value=text;q('.achmage-prompt').dispatchEvent(event('input'));await btn('send').click();await flush();};
   const chat=()=>panel().querySelector('.achmage-history')!.children.map(e=>e.children[1]?.textContent);
   beforeEach(()=>{templateGuard.current=undefined;kordocGuard.prepare.mockReset().mockResolvedValue(['함초롬바탕']);kordocGuard.create.mockReset().mockResolvedValue({pages:3,warnings:[]});wholeGuard.capture.mockReset().mockReturnValue({sections:[{index:0,paragraphs:[{index:0,text:'열린 문서의 고유 본문',tables:[]},{index:1,text:'',tables:[{controlIndex:0,charOffset:0,rowCount:1,colCount:2,cells:[{index:0,row:0,col:0,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'안건'}]},{index:1,row:0,col:1,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'검토'}]}]}]}]}],paragraphs:4,tables:1,chars:15});});
+  it.each(['싹다','싹 다','싹~~~다','싸그리 다','몽땅','몽~땅'])('routes checkbox intent through AI: %s',async(word)=>{
+    documentGuard.clearCheckboxes.mockClear();await start(1,{});
+    await ask(`이 문서 체크박스 ${word} 풀어`);const router=sentAt(0);
+    expect(documentGuard.clearCheckboxes).not.toHaveBeenCalled();
+    expect(router.prompt).toContain('clear_checkboxes');
+    await complete(router.requestId,'{"action":"clear_checkboxes","scope":"document"}');
+    expect(documentGuard.clearCheckboxes).toHaveBeenCalledOnce();expect(sends()).toBe(1);
+    expect(kordocGuard.prepare).not.toHaveBeenCalled();
+  });
   it('lets the model choose whole-document recomposition for the reported free-form request, then runs the template engine',async()=>{
     templateGuard.current=structuredClone(BUILTIN_DOCUMENT_TEMPLATES[2]);await start(1,{});
     const reported='지금 바꾼 서식에 맞춰서 제목이랑 목차 등등 다 생기게 몇장짜리로 표랑 섞어서 문서 전체를 다시써서 길게 뻥튀기해줘';

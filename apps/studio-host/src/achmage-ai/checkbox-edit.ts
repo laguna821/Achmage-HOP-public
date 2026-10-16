@@ -1,12 +1,6 @@
 import type { WasmBridge } from '@/upstream/core';
 type FormObjectHitResult = ReturnType<WasmBridge['getFormObjectAt']>;
 
-/** Only an explicit all-checkbox clearing command; quoted examples/questions/negations never mutate. */
-export function asksToClearCheckboxes(text: string): boolean {
-  if (/[`"“”‘’\n?？]/u.test(text) || /말|않|아니|방법|가능|설명|알려|제외|빼고|선택한|이\s*표|이\s*쪽/u.test(text)) return false;
-  return /체크\s*박스/u.test(text) && /전부|모두|모든|전체|싹\s*다/u.test(text)
-    && /(?:해제|풀어)\s*(?:해\s*)?(?:줘|주세요|봐|해봐|해줘|해주세요|하자|해라)[.!\s]*$/u.test(text);
-}
 type Target = FormObjectHitResult & { page: number; x: number; y: number };
 function key(t: FormObjectHitResult): string { return JSON.stringify([t.sec,t.para,t.ci,t.inCell,t.tablePara,t.tableCi,t.cellIdx,t.cellPara]); }
 function valid(t: FormObjectHitResult): boolean {

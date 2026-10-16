@@ -9,7 +9,7 @@ import { routerMessage } from './manuscript';
  * the operations available right now, and either answers or names one operation. Every
  * operation is validated here against the same facts before anything touches the document.
  */
-export const OPERATION_IDS = ['recompose_document', 'restyle_document', 'write_new_document', 'edit_selection', 'format_text', 'tidy_draft', 'calculate_selection', 'refresh_toc', 'format_selection', 'edit_whole_body', 'edit_recent', 'insert_at_caret', 'insert_answer'] as const;
+export const OPERATION_IDS = ['clear_checkboxes', 'recompose_document', 'restyle_document', 'write_new_document', 'edit_selection', 'format_text', 'tidy_draft', 'calculate_selection', 'refresh_toc', 'format_selection', 'edit_whole_body', 'edit_recent', 'insert_at_caret', 'insert_answer'] as const;
 export type OperationId = typeof OPERATION_IDS[number];
 
 export interface OperationOffer { id: OperationId; does: string; available: boolean; reason?: string }
@@ -23,6 +23,7 @@ export type RouterDecision =
   | { kind: 'invalid'; reason: string };
 
 const DOES: Record<OperationId, string> = {
+  clear_checkboxes: '열린 문서의 모든 실제 양식 체크박스를 해제합니다. 표 안의 체크박스도 포함하며 글·표 구조·서식을 보존합니다. 사용자가 전체 해제를 원할 때만 선택하고 JSON에 scope:"document"를 반드시 넣으세요. 특정 표·쪽·선택 범위만 요청하면 이 작업으로 확대하지 말고 지원 범위를 설명하세요. 문자·그림 체크 표시는 지원하지 않습니다. 실제 개체 유무와 결과는 앱이 확인합니다.', 
   recompose_document: '열린 문서 전체를 서식(템플릿) 엔진으로 다시 구성하거나 다시 씁니다. 기존 내용을 바탕으로 제목·표지·목차·표·분량을 바꿀 수 있고 표가 있는 문서도 됩니다. Ctrl+Z 한 번으로 원래대로 돌아갑니다.',
   restyle_document: '글 내용은 한 글자도 바꾸지 않고 열린 문서의 제목·소제목·본문·항목·표 서식만 선택한 서식(템플릿)에 맞춥니다. AI가 본문을 쓰지 않아 몇 초 안에 끝나고 그림·표·필드·머리말·쪽 번호·표지는 그대로 둡니다. "양식만 바꿔줘", "이 서식으로 맞춰줘"처럼 내용 변경이 없는 요청에 씁니다. Ctrl+Z 한 번으로 되돌립니다.',
   write_new_document: '선택한 서식으로 새 문서를 작성합니다(빈 문서면 이 창, 아니면 새 창). 열린 문서의 내용은 쓰지 않습니다.',
@@ -42,6 +43,7 @@ export function offerOperations(card: DocumentStateCard): OperationOffer[] {
   const structured = structuredEditable(card), bodySelection = !!card.selection && !card.selection.inTable;
   const reason = (id: OperationId): string | undefined => {
     switch (id) {
+      case 'clear_checkboxes': return card.open ? undefined : '열린 문서가 없습니다';
       case 'recompose_document': return !card.open ? '열린 문서가 없습니다' : card.blank ? '빈 문서입니다(write_new_document 사용)' : undefined;
       case 'restyle_document': return !card.open ? '열린 문서가 없습니다' : card.blank ? '빈 문서입니다' : undefined;
       case 'write_new_document': return undefined;
@@ -103,11 +105,12 @@ export function decodeRouterReply(reply: string, card: DocumentStateCard, templa
   if (v.action === 'clarify') {
     const options = Array.isArray(v.options) ? v.options : [];
     if (typeof v.question !== 'string' || !v.question.trim() || v.question.length > 300 || options.length < 2 || options.length > 4) return { kind: 'invalid', reason: '확인 질문 형식이 올바르지 않습니다.' };
-    const needsValues = (op: unknown) => op === 'format_text' || op === 'calculate_selection';
+    const needsValues = (op: unknown) => op === 'clear_checkboxes' || op === 'format_text' || op === 'calculate_selection';
     const parsed = options.map(o => o && typeof o === 'object' ? o as Record<string, unknown> : {}).filter(o => typeof o.label === 'string' && o.label.trim() && o.label.length <= 60 && known(o.action) && !needsValues(o.action) && offers.get(o.action as OperationId)!.available).map(o => ({ label: (o.label as string).trim(), op: o.action as OperationId }));
     return parsed.length >= 2 ? { kind: 'clarify', question: v.question.trim(), options: parsed } : { kind: 'invalid', reason: '확인 질문의 선택지를 지금 문서에서 실행할 수 없습니다.' };
   }
   if (!known(v.action)) return { kind: 'invalid', reason: 'AI가 이 앱에 없는 작업을 골랐습니다.' };
+  if(v.action==='clear_checkboxes' && (v.scope!=='document' || v.checked!==undefined || v.target!==undefined)) return {kind:'invalid',reason:'체크박스 전체 해제 범위가 명시되지 않았거나 지원하지 않는 대상입니다.'};
   const offer = offers.get(v.action)!;
   if (!offer.available) return { kind: 'invalid', reason: offer.reason ?? '지금은 그 작업을 할 수 없습니다.' };
   // The restatement only clarifies the user's request; it is kept short so it cannot carry a long injected task.
@@ -123,6 +126,7 @@ export function decodeRouterReply(reply: string, card: DocumentStateCard, templa
 /** What the app will do, in the user's terms (shown in the chat before the document changes). */
 export function describeOperation(op: OperationId, templateName?: string): string {
   switch (op) {
+    case 'clear_checkboxes': return '문서의 양식 체크박스 전체 해제 작업을 처리했습니다.';
     case 'recompose_document': return `현재 문서 전체를 '${templateName ?? '선택한'}' 서식으로 다시 구성합니다. Ctrl+Z 한 번으로 되돌릴 수 있습니다.`;
     case 'restyle_document': return `내용은 그대로 두고 '${templateName ?? '선택한'}' 서식만 적용합니다(AI 없이). Ctrl+Z 한 번으로 되돌릴 수 있습니다.`;
     case 'write_new_document': return `'${templateName ?? '선택한'}' 서식으로 새 문서를 작성합니다.`;
@@ -143,6 +147,7 @@ export function describeOperation(op: OperationId, templateName?: string): strin
 export function routeForOperation(op: OperationId, card: DocumentStateCard, rich = false, params: { format?: TextFormat; calc?: string } = {}): Route {
   const { format, calc } = params;
   switch (op) {
+    case 'clear_checkboxes': return { kind: 'clear-checkboxes' };
     case 'recompose_document': return { kind: 'compose', placement: 'current', recompose: true, fallbackTemplate: false };
     case 'restyle_document': return { kind: 'restyle' };
     case 'write_new_document': return { kind: 'compose', placement: card.open && card.blank ? 'current' : 'new', recompose: false, fallbackTemplate: false };

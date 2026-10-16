@@ -6,6 +6,11 @@ const card = (extra: Partial<DocumentStateCard> = {}): DocumentStateCard => ({ o
 const templates = [{ id: 'builtin-report', name: '보고서', group: '공문서 양식' }];
 
 describe('intent router decisions', () => {
+  it('requires explicit supported checkbox scope and an open document',()=>{
+    for(const reply of ['{"action":"clear_checkboxes"}','{"action":"clear_checkboxes","scope":"selection"}','{"action":"clear_checkboxes","scope":"document","checked":true}']) expect(decodeRouterReply(reply,card(),[]).kind).toBe('invalid');
+    expect(decodeRouterReply('{"action":"clear_checkboxes","scope":"document"}',card({open:false}),[]).kind).toBe('invalid');
+    expect(decodeRouterReply('{"action":"clear_checkboxes","scope":"document"}',card(),[])).toMatchObject({kind:'action',op:'clear_checkboxes'});
+  });
   it('treats prose as an answer and a JSON object (fenced or not) as an operation', () => {
     expect(decodeRouterReply('이 문서는 정렬 시험 문서입니다.', card(), templates)).toEqual({ kind: 'answer', text: '이 문서는 정렬 시험 문서입니다.' });
     expect(decodeRouterReply('```json\n{"action":"recompose_document","instruction":"다시 구성","templateId":"builtin-report"}\n```', card(), templates)).toEqual({ kind: 'action', op: 'recompose_document', instruction: '다시 구성', templateId: 'builtin-report' });
@@ -30,7 +35,7 @@ describe('intent router decisions', () => {
 
   it('offers operations from document facts and maps them to the local execution paths', () => {
     const offers = Object.fromEntries(offerOperations(card({ objects: { tables: 2, other: 0, layout: 3 } })).map(o => [o.id, o.available]));
-    expect(offers).toEqual({ recompose_document: true, restyle_document: true, write_new_document: true, edit_selection: true, format_text: false, tidy_draft: false, calculate_selection: false, refresh_toc: false, format_selection: false, edit_whole_body: false, edit_recent: false, insert_at_caret: true, insert_answer: false });
+    expect(offers).toEqual({ clear_checkboxes: true, recompose_document: true, restyle_document: true, write_new_document: true, edit_selection: true, format_text: false, tidy_draft: false, calculate_selection: false, refresh_toc: false, format_selection: false, edit_whole_body: false, edit_recent: false, insert_at_caret: true, insert_answer: false });
     const followUps = Object.fromEntries(offerOperations(card({ recentEdit: { paragraphs: 2, preview: '방금 쓴 글' }, lastAnswer: '답변' })).map(o => [o.id, o.available]));
     expect([followUps.edit_recent, followUps.insert_answer]).toEqual([true, true]);
     expect(routeForOperation('edit_recent', card())).toEqual({ kind: 'structured', usesSelection: false, scope: 'recent' });

@@ -36,6 +36,7 @@ export type Route =
   | { kind: 'calculate'; calc?: string }
   | { kind: 'toc' }
   | { kind: 'text-format'; format?: TextFormat }
+  | { kind: 'clear-checkboxes' }
   | { kind: 'chat' };
 
 /** Style/table wording that a plain text replacement cannot honour. */
@@ -86,6 +87,7 @@ export function describeRoute(route: Route, text: string, templateName?: string)
     case 'tidy-draft': return `선택한 초안을 항목·표로 정리합니다(AI 없이)${undo}`;
     case 'calculate': return `선택한 숫자·날짜를 계산해 바꿉니다(AI 없이)${undo}`;
     case 'toc': return `목차 쪽 번호를 지금 쪽에 맞게 채웁니다(AI 없이)${undo}`;
+    case 'clear-checkboxes': return `문서의 양식 체크박스를 모두 해제합니다${undo}`;
     case 'chat': return '대화로 답합니다 · 문서는 바뀌지 않습니다';
   }
 }

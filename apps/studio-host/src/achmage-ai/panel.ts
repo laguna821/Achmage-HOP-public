@@ -1,4 +1,3 @@
-import { asksToClearCheckboxes } from './checkbox-edit';
 import { tidySelectedDraft } from './draft-tidy';
 import { describeTextFormat, type TextFormat } from './text-format';
 import { AiConnection, authSession, sameAuthSession, nativeTransport, shouldPoll, usageLabel, type AiAction, type AiTransport, type ProviderId } from './bridge';
@@ -436,15 +435,6 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   async function send(captured?: Capture, instruction?: string, options: { whole?: boolean; routed?: boolean } = {}): Promise<void> {
     const state = connection.current;
     const text = (instruction ?? prompt.value).trim();
-    if (asksToClearCheckboxes(text) && !captured && !options.whole) {
-      if (composing || applying || connection.busy || state?.busy || state?.commandPending) { message(busyMessage()); return; }
-      applying=true;render();
-      try { const result=await doc.clearCheckboxes();lastApplied=undefined;
-        message(result.found ? `양식 체크박스 ${result.found}개 중 ${result.changed}개를 해제했습니다. 기존 서식은 유지됩니다. Ctrl+Z로 되돌릴 수 있습니다. 문자·그림으로 된 체크 표시는 이 작업에 포함하지 않습니다.` : '편집 가능한 양식 체크박스를 찾지 못했습니다. 문자나 그림으로 된 체크 표시는 별도 편집이 필요합니다.', 'info');
-        if(instruction===undefined) prompt.value='';
-      } catch(error) {message(error instanceof Error?error.message:'체크박스를 해제하지 못했습니다.');}
-      finally {applying=false;render();} return;
-    }
     let template: DocumentTemplate | undefined;
     // A broken saved template never blocks a request that does not need one (F12).
     try { template=documentTemplates?.current(); } catch { template=undefined; message('저장된 문서 서식을 읽지 못해 서식 없이 진행합니다. 서식 창에서 확인해 주세요.', 'info'); }
@@ -595,6 +585,15 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   interface ExecutionContext { text: string; promptText?: string; captured?: Capture; template?: DocumentTemplate; session: string; rememberUser: boolean; clearPrompt: boolean; routedMs?: number; routed?: boolean; /** Handled by the app alone (no model): no AI session is needed. */ local?: boolean }
   /** Returns whether the work started (a request was sent, or a local change was applied). */
   async function execute(route: Route, ctx: ExecutionContext): Promise<boolean> {
+    if (route.kind === 'clear-checkboxes') {
+      if(composing||applying) {message(busyMessage());return false;}
+      applying=true;render();
+      try {const result=await doc.clearCheckboxes();lastApplied=undefined;
+        const summary=result.found ? `양식 체크박스 ${result.found}개 중 ${result.changed}개를 해제했습니다. 기존 서식은 유지됩니다. Ctrl+Z로 되돌릴 수 있습니다. 문자·그림 체크 표시는 포함하지 않습니다.` : '편집 가능한 양식 체크박스를 찾지 못했습니다. 문자나 그림으로 된 체크 표시는 별도 편집이 필요합니다.';
+        remember({id:crypto.randomUUID(),provider:connection.current?.selectedProvider??'openai',role:'assistant',text:summary,at:Date.now()});message(summary,'info');return true;
+      }catch(error){message(error instanceof Error?error.message:'체크박스를 해제하지 못했습니다.');return false;}
+      finally{applying=false;render();}
+    }
     if (route.kind === 'restyle') return restyle(ctx.template, ctx.text);
     if (route.kind === 'text-format') return formatText(route.format);
     if (route.kind === 'tidy-draft') return tidyDraft(ctx.template);

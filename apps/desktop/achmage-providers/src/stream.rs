@@ -45,7 +45,7 @@ impl Stream {
             return Err("event_after_result");
         }
         match v["type"].as_str().ok_or("missing_event_type")? {
-            "system" | "user" => {}
+            "system" | "user" | "rate_limit_event" => {}
             "stream_event" => {
                 let e = &v["event"];
                 if e["type"] == "content_block_start" && e["content_block"]["type"] == "tool_use" {
@@ -147,6 +147,16 @@ mod tests {
         let mut s = Stream::default();
         s.push(b"{\"type\":\"system\"}").unwrap();
         assert_eq!(s.finish(), Err("truncated_stream"));
+    }
+    #[test]
+    fn rate_limit_notice_does_not_complete_or_fail_a_turn() {
+        let mut s=Stream::default();
+        s.push(b"{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\"}}\n").unwrap();
+        assert_eq!(s.finish(),Err("missing_result"));
+        s.push(b"{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"OK\"}\n").unwrap();
+        s.finish().unwrap();assert_eq!(s.text,"OK");
+        let mut failed=Stream::default();
+        assert_eq!(failed.push(b"{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true}\n"),Err("provider_result_error"));
     }
     #[test]
     fn limits() {

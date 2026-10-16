@@ -59,7 +59,7 @@ export interface PanelDeps { wasm: WasmBridge; input: InputHandler; eventBus: Ev
 export interface PanelOptions { router?: boolean; /** At launch, reselect the last provider and pick up its existing sign-in (default on). */ restoreSignIn?: boolean }
 // This orchestration stays in one owner so request/account/document fences cannot diverge.
 // Grok is not listed: its CLI default model is used, and a status probe would reset a finished answer.
-const CATALOG_PROVIDERS=new Set<ProviderId>(['openai','gemini']);
+const CATALOG_PROVIDERS=new Set<ProviderId>(['openai','claude','gemini']);
 export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeTransport, panelOptions: PanelOptions = {}): () => void {
   const routerEnabled = panelOptions.router !== false;
   const area = document.getElementById('editor-area');

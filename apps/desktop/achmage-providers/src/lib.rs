@@ -2,6 +2,7 @@
 mod acp;
 mod grok;
 mod host;
+mod models;
 mod process;
 mod recent;
 mod stream;

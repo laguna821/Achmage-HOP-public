@@ -59,6 +59,10 @@ fn main() {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).unwrap();
     let v: serde_json::Value = serde_json::from_str(&input).unwrap();
+    if v["type"] == "control_request" && v["request"]["subtype"] == "initialize" {
+        println!("{}",json!({"type":"control_response","response":{"request_id":v["request_id"],"subtype":"success","response":{"models":[{"value":"default","displayName":"Default","resolvedModel":"claude-fixture-current"},{"value":"opus","displayName":"Opus"}]}}}));
+        return;
+    }
     let prompt = v["message"]["content"].as_str().unwrap();
     if prompt == "WAIT" {
         std::thread::sleep(Duration::from_secs(30));
@@ -84,6 +88,7 @@ fn main() {
         json!({"type":"system","subtype":"init"}),
         json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":text}}}),
         json!({"type":"assistant","message":{"content":[{"type":"text","text":text}],"usage":{"input_tokens":0,"output_tokens":3}}}),
+        json!({"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}),
         json!({"type":"result","subtype":"success","result":text}),
     ] {
         let line = format!("{e}\n");

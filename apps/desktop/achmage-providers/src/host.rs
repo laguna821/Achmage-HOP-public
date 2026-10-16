@@ -111,6 +111,8 @@ impl ClaudeHost {
         s.view["turn"] = json!({"id":null,"status":"idle","text":null});
         s.view["busy"] = json!(true);
         s.view["notice"] = Value::Null;
+        s.view["models"] = json!([]);
+        s.view["modelCatalogStatus"] = json!("loading");
         self.cancel = Arc::new(AtomicBool::new(false));
         let (cfg, shared, cancel, lease) = (
             self.cfg.clone(),
@@ -147,7 +149,11 @@ impl ClaudeHost {
                 };
                 status(&cfg, &cancel)
             })();
+            let catalog = if matches!(&result, Ok(Some(_))) && !cancel.load(Ordering::Acquire) {
+                Some(crate::models::query(&cfg, &cancel))
+            } else { None };
             update(&shared, generation, |s| {
+                if let Some(catalog) = catalog { crate::models::publish(s, catalog); }
                 s["busy"] = json!(false);
                 s["auth"] = match result {
                     Ok(Some(account)) if !cancel.load(Ordering::Acquire) => {
@@ -165,6 +171,23 @@ impl ClaudeHost {
         });
         Ok(())
     }
+    pub fn refresh_models(&mut self) -> Result<()> {
+        let mut s=self.shared.lock().unwrap();
+        if self.running.load(Ordering::Acquire) { return Err("busy"); }
+        if s.view["auth"]["status"] != "signed_in" { return Err("signed_out"); }
+        s.view["modelCatalogStatus"]=json!("loading");
+        let generation=s.generation;
+        self.cancel=Arc::new(AtomicBool::new(false));
+        let (cfg,shared,cancel,lease)=(self.cfg.clone(),self.shared.clone(),self.cancel.clone(),self.lease.clone());
+        self.running.store(true,Ordering::Release);
+        let running=Running(self.running.clone());
+        thread::spawn(move || {
+            let _running=running;let _lease=lease;
+            let catalog=crate::models::query(&cfg,&cancel);
+            if !cancel.load(Ordering::Acquire) { update(&shared,generation,|s|crate::models::publish(s,catalog)); }
+        });
+        Ok(())
+    }
     pub fn cancel_login(&mut self) -> Result<()> {
         if self.state()["auth"]["status"] != "pending" {
             return Err("no_pending_login");
@@ -178,6 +201,8 @@ impl ClaudeHost {
         self.cancel.store(true, Ordering::Release);
         s.generation = n;
         s.view["auth"] = json!({"status":"signed_out","sessionGeneration":null});
+        s.view["models"] = json!([]);
+        s.view["modelCatalogStatus"] = json!("idle");
         s.view["turn"] = json!({"id":null,"status":"idle","text":null});
         s.view["busy"] = json!(false);
         s.view["usage"] = json!({"inputTokens":null,"outputTokens":null,"remainingPercent":null});
@@ -243,29 +268,8 @@ impl ClaudeHost {
                 if status(&cfg, &cancel)?.is_none() {
                     return Err("authentication_failed");
                 }
-                let mut args: Vec<String> = [
-                    "-p",
-                    "--input-format",
-                    "stream-json",
-                    "--output-format",
-                    "stream-json",
-                    "--verbose",
-                    "--include-partial-messages",
-                    "--tools",
-                    "",
-                    "--strict-mcp-config",
-                    "--mcp-config",
-                    "{\"mcpServers\":{}}",
-                    "--disable-slash-commands",
-                    "--setting-sources",
-                    "",
-                    "--restricted",
-                    "--no-session-persistence",
-                ]
-                .into_iter()
-                .map(str::to_string)
-                .collect();
-                if let Some(m) = model {
+                let mut args = crate::models::document_args();
+                if let Some(m) = model.filter(|m| m != "default") {
                     args.extend(["--model".into(), m])
                 }
                 let mut frame=serde_json::to_vec(&json!({"type":"user","message":{"role":"user","content":prompt},"parent_tool_use_id":null,"session_id":""})).map_err(|_|"input_encoding")?;

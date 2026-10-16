@@ -47,7 +47,11 @@ fn restore_login_stream_usage() {
     h.restore().unwrap();
     assert_eq!(wait(&h)["auth"]["status"], "signed_out");
     login(&mut h);
-    h.send("r1".into(), "한글 😀".into(), None).unwrap();
+    assert_eq!(h.state()["modelCatalogStatus"], "ready");
+    assert_eq!(h.state()["models"][0]["id"], "default");
+    h.refresh_models().unwrap();
+    assert_eq!(wait(&h)["models"][1]["id"], "opus");
+    h.send("r1".into(), "한글 😀".into(), Some("opus".into())).unwrap();
     let s = wait(&h);
     assert_eq!(s["turn"]["status"], "completed");
     assert_eq!(s["turn"]["text"], "응답: 한글 😀");

@@ -99,7 +99,7 @@ impl OfficialCli for ClaudeHost {
             Action::BeginLogin {} => self.begin_login(),
             Action::BeginConsoleLogin {} => self.begin_console_login(),
             Action::RestoreConnection {} => self.restore(),
-            Action::RefreshModels {} => return Err("Claude 모델 목록 새로고침은 아직 지원하지 않습니다.".into()),
+            Action::RefreshModels {} => self.refresh_models(),
             Action::CancelLogin {} => self.cancel_login(),
             Action::CancelTurn { turn_id } => self.cancel_turn(&turn_id),
             Action::Logout {} => self.disconnect(),
@@ -363,15 +363,24 @@ fn discover_codex() -> Option<PathBuf> {
     let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
     let roaming = std::env::var_os("APPDATA").map(PathBuf::from);
     let search_path = std::env::var_os("PATH");
-    codex_candidates(
+    let candidates = codex_candidates(
         override_path.as_deref(),
         local.as_deref(),
         search_path.as_deref(),
         roaming.as_deref(),
         cfg!(windows),
-    )
-    .into_iter()
-    .find_map(valid_codex_candidate)
+    );
+    // Desktop launchers often have a shorter PATH than an interactive shell. Prefer the
+    // engine maintained by the installed ChatGPT app, while respecting an explicit override.
+    #[cfg(target_os = "linux")]
+    let candidates = prefer_bundled_codex(candidates, override_path.is_some(), PathBuf::from("/usr/lib/chatgpt/resources/codex"));
+    candidates.into_iter().find_map(valid_codex_candidate)
+}
+
+#[cfg(target_os = "linux")]
+fn prefer_bundled_codex(mut candidates: Vec<PathBuf>, has_override: bool, bundle: PathBuf) -> Vec<PathBuf> {
+    candidates.insert(usize::from(has_override), bundle);
+    candidates
 }
 
 // Keep discovery separate from process launch: inspecting installed paths never
@@ -1025,6 +1034,16 @@ mod codex_discovery_tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let file=std::fs::File::create(path).unwrap();
         file.set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH+std::time::Duration::from_secs(seconds))).unwrap();
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_bundle_precedes_path_but_not_explicit_override() {
+        let root=fixture();let bundle=root.join("app/codex");let old=root.join("path/codex");let explicit=root.join("override/codex");
+        executable(&bundle,200);executable(&old,100);executable(&explicit,50);
+        let choose=|v:Vec<PathBuf>|v.into_iter().find_map(valid_codex_candidate);
+        assert_eq!(choose(prefer_bundled_codex(vec![old.clone()],false,bundle.clone())),Some(bundle.canonicalize().unwrap()));
+        assert_eq!(choose(prefer_bundled_codex(vec![explicit.clone(),old.clone()],true,bundle)),Some(explicit.canonicalize().unwrap()));
+        assert_eq!(choose(prefer_bundled_codex(vec![old.clone()],false,root.join("absent/codex"))),Some(old.canonicalize().unwrap()));
     }
     #[test]
     fn override_then_newest_bundle_then_path_then_npm() {

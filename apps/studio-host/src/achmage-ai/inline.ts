@@ -49,7 +49,7 @@ export function selectsWholeDocument(wasm: Pick<WasmBridge,'getSectionCount'|'ge
 }
 
 const POPOVER = '<form><header><strong class="inline-title">AI로 선택 영역 편집</strong><span class="inline-scope"></span><button type="button" class="inline-close" data-cancel aria-label="닫기">×</button></header>'
-  + '<p class="inline-original"></p><label class="inline-expand" hidden><input type="checkbox"> 문단 전체로 넓히기 <span class="inline-expand-hint"></span></label><div class="inline-calc" role="group" aria-label="바로 계산" hidden></div><div class="inline-chips" role="group" aria-label="빠른 요청"></div><div class="inline-row"><textarea rows="2" maxlength="8000" placeholder="어떻게 바꿀까요? 예: 더 간결하게, 공문 어투로"></textarea>'
+  + '<p class="inline-original"></p><label class="inline-expand" hidden><input type="checkbox"> 문단 전체로 넓히기 <span class="inline-expand-hint"></span></label><div class="inline-calc" role="group" aria-label="바로 계산" hidden></div><div class="inline-chips" role="group" aria-label="빠른 요청"></div><div class="inline-row"><textarea rows="2" placeholder="어떻게 바꿀까요? 예: 더 간결하게, 공문 어투로"></textarea>'
   + '<button type="submit" class="inline-send" aria-label="AI에 요청">↑</button></div><p class="inline-status" role="status"></p>'
   + '<small>Enter 보내기 · Shift+Enter 줄바꿈 · Esc 닫기 · 적용 후 Ctrl+Z로 되돌리기</small></form>';
 

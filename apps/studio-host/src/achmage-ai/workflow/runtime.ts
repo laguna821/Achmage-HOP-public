@@ -56,6 +56,7 @@ export async function runWorkflow(context:WorkflowContext,draft:WorkflowDraft|nu
    else if(call.tool==='edit')result=draft.edit(call.changes);
    else if(call.tool==='selection')result=draft.editSelection(call.text);
    else if(call.tool==='format')result=draft.format(call.ids,call.format);
+   else if(call.tool==='table'||call.tool==='checkbox')result=draft.control(call);
    else if(host.extra)result=host.extra(draft,call);
    else throw Error('이 도구는 현재 연결되지 않았습니다. 다른 작업으로 대체하지 마세요.');
    events.push({call,result});

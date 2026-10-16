@@ -1,3 +1,5 @@
+import {prepareControl} from './controls';
+import type {ToolCall} from './protocol';
 import type {AiDocument} from '../document';
 import type {RhwpDocumentStateV1} from '@/upstream/document-agent';
 import type {WasmBridge} from '@/upstream/core';
@@ -20,6 +22,7 @@ export class WorkflowDraft {
  read(req:ReadRequest={}) {this.assertOpen();return this.map.read(req);}
  edit(changes:TextChange[]) {return this.stage(prepareText(this.map,changes));}
  format(ids:string[],format:unknown) {return this.stage(prepareFormat(this.map,ids,format));}
+ control(call:ToolCall){return this.stage(prepareControl(this.map,call));}
  private stage(op:PreparedOperation){
   this.assertOpen();const snapshot=this.engine.saveSnapshot();
   try{executePrepared(this.engine,op);const map=new DocumentMap(this.engine,`${this.id}.${this.sequence+1}`);this.operations.push(op);this.sequence++;this.map=map;return {staged:true,operationCount:this.operations.length,revision:this.map.revision,message:'임시본에서 검증했습니다. finish 전에는 원문이 바뀌지 않습니다.'};}
@@ -37,7 +40,7 @@ export class WorkflowDraft {
    if(new DocumentMap(engine,'verify').fingerprint()!==expected)throw Error('실제 편집 결과가 검증한 임시본과 다릅니다.');
   });
   this.committed=true;
-  return {changed:operations.reduce((n,op)=>n+(op.kind==='selection'?1:op.nodes.length),0),message:'요청한 변경을 반영하고 결과를 확인했습니다. Ctrl+Z 한 번으로 되돌릴 수 있습니다.'};
+  return {changed:operations.reduce((n,op)=>n+(op.kind==='checkbox'?op.changed:op.kind==='selection'||op.kind==='table'?1:op.nodes.length),0),message:'요청한 변경을 반영하고 결과를 확인했습니다. Ctrl+Z 한 번으로 되돌릴 수 있습니다.'};
  }
  private assertOpen(){if(this.closed)throw Error('종료된 작업입니다. 다시 요청하세요.');}
  close(){if(!this.closed){this.closed=true;this.engine.free();}}

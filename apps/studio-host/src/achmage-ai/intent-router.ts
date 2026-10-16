@@ -45,7 +45,7 @@ export function offerOperations(card: DocumentStateCard): OperationOffer[] {
       case 'recompose_document': return !card.open ? '열린 문서가 없습니다' : card.blank ? '빈 문서입니다(write_new_document 사용)' : undefined;
       case 'restyle_document': return !card.open ? '열린 문서가 없습니다' : card.blank ? '빈 문서입니다' : undefined;
       case 'write_new_document': return undefined;
-      case 'edit_selection': return card.selection?.inTable && !card.selection.chars ? '여러 셀에 걸친 선택은 아직 고칠 수 없습니다. 셀 하나 안의 글을 선택하세요' : bodySelection || (card.caret?.paragraphChars ?? 0) > 0 ? undefined : '고칠 본문이 선택되지 않았습니다';
+      case 'edit_selection': return card.selection?.inTable && !card.selection.chars && !card.selection.emptyCell ? '여러 셀에 걸친 선택은 아직 고칠 수 없습니다. 셀 하나 안의 글을 선택하세요' : bodySelection || !!card.selection?.chars || card.selection?.emptyCell === true || (card.caret?.paragraphChars ?? 0) > 0 ? undefined : '고칠 본문이 선택되지 않았습니다';
       case 'format_text': return card.selection ? undefined : '서식을 바꿀 글이 선택되지 않았습니다';
       case 'calculate_selection': return card.selection?.calculations.length ? undefined : '계산할 금액·날짜·두 수가 선택되지 않았습니다';
       case 'refresh_toc': return card.toc >= 2 ? undefined : '뒤에 같은 제목이 있는 목차 줄을 찾지 못했습니다';
@@ -76,7 +76,7 @@ export function routerPrompt(input: { text: string; card: DocumentStateCard; tem
     '작업: ' + JSON.stringify(offerOperations(card)),
     '서식 목록: ' + JSON.stringify(input.templates),
     '문서 상태: ' + JSON.stringify(state),
-    '최근 대화: ' + JSON.stringify(input.history.slice(-6).map(entry => ({ role: entry.role, text: clip(entry.text, 600) }))),
+    '최근 대화: ' + JSON.stringify(input.history),
     '본문: ' + JSON.stringify(card.body.text),
     // A pasted manuscript is shown only in part; the chosen operation still receives all of it.
     '사용자 메시지: ' + JSON.stringify(routerMessage(input.text)),

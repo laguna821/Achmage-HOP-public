@@ -66,6 +66,14 @@ describe('intent router decisions', () => {
   });
 });
 
+describe('form selection regression', () => {
+  it('offers a valid cell selection and an empty cell, but rejects cross-cell selection', () => {
+    for (const selection of [{paragraphs:1,chars:8,inTable:true,preview:'교육목표',calculations:[]}, {paragraphs:1,chars:0,inTable:true,emptyCell:true,preview:'',calculations:[]}]) {
+      expect(offerOperations(card({selection})).find(o=>o.id==='edit_selection')?.available).toBe(true);
+    }
+    expect(offerOperations(card({selection:{paragraphs:1,chars:0,inTable:true,preview:'',calculations:[]}})).find(o=>o.id==='edit_selection')?.available).toBe(false);
+  });
+});
 describe('document state card', () => {
   it('reads body, tables, layout objects and the selection leniently', () => {
     const paragraphs = ['제목', '', '첫 문단입니다', '둘째 문단'];

@@ -187,7 +187,7 @@ export function captureCellRange(w:WasmBridge,identity:RhwpDocumentStateV1,cell:
   for(let p=x.paragraph;p<=y.paragraph;p++)for(let i=p===x.paragraph?x.offset:0;i<=(p===y.paragraph?y.offset:len(p));i++)
     if(JSON.parse(d.getFieldInfoAtInCell(s,cell.parent,cell.control,cell.cell,p,i,false)).inField)fail('필드를 포함한 셀 선택은 아직 지원하지 않습니다.');
   const before=paragraphs.slice(x.paragraph,y.paragraph+1).map((p,i,all)=>Array.from(p.text).slice(i===0?x.offset:0,i===all.length-1?y.offset:undefined).join('')).join('\n');
-  if(!before.length)fail('수정할 셀 글을 먼저 선택하세요.');
+  if(!before.length && !(x.paragraph===y.paragraph && x.offset===0 && y.offset===0 && len(x.paragraph)===0))fail('수정할 셀 글을 먼저 선택하세요.');
   if(/⟦[^⟦⟧\n]{1,12}⟧/u.test(before))fail('셀 글에 개체 표시와 같은 ⟦ ⟧ 문자가 있어 고칠 수 없습니다.');
   return {identity,start:{sectionIndex:s,paragraphIndex:x.paragraph,charOffset:x.offset},end:{sectionIndex:s,paragraphIndex:y.paragraph,charOffset:y.offset},paragraphs,controls:JSON.stringify(w.getControls()),count,before,objects:[],edges:[],cell:{parent:cell.parent,control:cell.control,cell:cell.cell}};
 }

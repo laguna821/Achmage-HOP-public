@@ -124,6 +124,19 @@ describe('selection editing inside one table cell (T10) on actual pinned WASM',(
   return {...d,parent:t.paraIdx,control:t.controlIdx};
  }
  const cellText=(d:ReturnType<typeof table>,cell:number,p=0)=>d.native.getTextInCell(0,d.parent,d.control,cell,p,0,d.native.getCellParagraphLength(0,d.parent,d.control,cell,p));
+ it('fills an empty cell with multiple paragraphs while preserving neighbouring cells',()=>{
+  const d=table();
+  try {
+   const length=d.native.getCellParagraphLength(0,d.parent,d.control,5,0);
+   d.native.deleteTextInCell(0,d.parent,d.control,5,0,0,length);
+   const others=[0,1,2,3,4,6,7,8].map(cell=>cellText(d,cell)), dims=d.native.getTableDimensions(0,d.parent,d.control);
+   const c=captureCellRange(d.wasm,identity,{section:0,parent:d.parent,control:d.control,cell:5},{paragraph:0,offset:0},{paragraph:0,offset:0});
+   executeMultiRange(d.wasm,c,'미디어콘텐츠 바이브코딩\n협력기업 연계 16주 PBL');
+   expect([cellText(d,5,0),cellText(d,5,1)]).toEqual(['미디어콘텐츠 바이브코딩','협력기업 연계 16주 PBL']);
+   expect([0,1,2,3,4,6,7,8].map(cell=>cellText(d,cell))).toEqual(others);
+   expect(d.native.getTableDimensions(0,d.parent,d.control)).toBe(dims);
+  } finally { d.native.free(); }
+ });
  it('edits only the selected cell, keeps the other cells, the structure and the cell text formatting',()=>{
   const d=table();
   try{

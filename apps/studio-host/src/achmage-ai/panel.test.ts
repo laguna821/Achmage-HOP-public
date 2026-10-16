@@ -428,7 +428,7 @@ describe('model-routed chat messages',()=>{
     await complete(sentAt(1).requestId,'{"action":"insert_answer"}');
     expect(sends()).toBe(2);expect(documentGuard.apply).toHaveBeenCalledWith(expect.objectContaining({insertion:{}}),'다음 주 회의는 10시에 시작합니다.');
     expect(q('.achmage-message').textContent).toContain('직전 답변을 커서 위치에 넣었습니다');
-    await btn('new-conversation').click();await ask('새 질문');const fresh=sentAt(2).prompt;
+    await btn('new-conversation').click();expect(localStorage.getItem('achmage.hop.chat.v1')).toBeNull();expect(q('.achmage-history').textContent).not.toContain('회의 안내 문구');await ask('새 질문');const fresh=sentAt(2).prompt;
     expect(fresh).not.toContain('회의 안내 문구');expect(fresh).toContain('"lastAnswer":null');
   });
   it('stops a routed edit when the caret moved while the model was deciding (review HIGH 1)',async()=>{

@@ -94,7 +94,8 @@ export class AiDocument {
     const selection = this.input.getSelection();
     return JSON.stringify({ cursor: logical(this.input.getCursorPosition()), selection: selection && { start: logical(selection.start), end: logical(selection.end) } });
   }
-  capture(): ParagraphCapture {
+  capture(): Capture {
+    if (!this.input.getSelection() && this.emptyCellCaret()) return this.captureSelection();
     if (this.wasm.pageCount === 0) throw new Error('문서를 먼저 여세요.');
     const context = this.controller.getSelectionContext();
     if (!context.editable || !context.target) throw new Error('같은 글자 서식의 본문 문단만 수정할 수 있습니다. 표·필드·혼합 서식은 아직 지원하지 않습니다.');
@@ -108,9 +109,15 @@ export class AiDocument {
       expectedFormatSha256: evidence.formatSha256, expectedAdjacentContextSha256: evidence.adjacentContextSha256, replacement: '',
     } };
   }
+  private emptyCellCaret(): ReturnType<InputHandler['getCursorPosition']> | null {
+    const p=this.input.getCursorPosition();
+    if (!sameCell(p,p)) return null;
+    return this.wasm.getCellParagraphLength(p.sectionIndex,p.parentParaIndex!,p.controlIndex!,p.cellIndex!,p.cellParaIndex!) === 0 ? p : null;
+  }
   /** With wholeParagraphs the request covers the selected paragraphs from start to end; the visible selection is unchanged. */
   captureSelection(options:{wholeParagraphs?:boolean}={}): Capture {
-    const selection=this.input.getSelection();
+    const caret=this.emptyCellCaret();
+    const selection=this.input.getSelection() ?? (caret ? {start:caret,end:caret} : null);
     if(!selection||this.applying||this.wasm.pageCount===0)throw Error('수정할 본문을 먼저 선택하세요.');
     const body=(p:typeof selection.start)=>p.parentParaIndex===undefined&&p.cellIndex===undefined&&!p.isTextBox&&!p.cellPath?.length;
     const identity=this.identity();if(!this.owns(identity))throw Error('문서 복구 상태를 확인하지 못했습니다.');

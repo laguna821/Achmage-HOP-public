@@ -26,7 +26,7 @@ import { installRuntimeTools } from './runtime-tools';
 import { installTelegramSettings } from './telegram-settings';
 import { requestTemplateImport, PANEL_ASK_EVENT, PANEL_EDIT_EVENT, PANEL_RESTYLE_EVENT, PANEL_TOC_EVENT, PANEL_WHOLE_EDIT_EVENT, publishPanelStatus, registerPanelAction, watchPanelActions, type PanelEditRequest, type PanelAction } from './panel-events';
 import { installResearchExtension } from '../achmage-research';
-import { addHistory, loadHistory, saveHistory, panelWidth, acceptsCompletion, unwrapQuotedReply, loadProvider, saveProvider, PANEL_WIDTH_KEY, CHAT_STORAGE_KEY, type ChatEntry } from './panel-state';
+import { conversationContext, addHistory, loadHistory, saveHistory, panelWidth, acceptsCompletion, unwrapQuotedReply, loadProvider, saveProvider, PANEL_WIDTH_KEY, CHAT_STORAGE_KEY, type ChatEntry } from './panel-state';
 import type { WasmBridge, EventBus } from '@/upstream/core';
 import type { InputHandler } from '@/upstream/editor';
 import type { CanvasView } from '@/upstream/view';
@@ -274,6 +274,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     button('template-add').disabled = !extensionActions.some(action => action.id === 'document-templates');
     for (const item of panel.querySelectorAll<HTMLElement>('[data-provider-tool]')) item.hidden = item.dataset.providerTool !== state?.selectedProvider;
     button('clear-history').disabled = locked || !!running;
+    button('new-conversation').disabled = locked || !!running;
     q<HTMLSelectElement>('.achmage-provider-switch').disabled = locked || state?.busy === true || composing;
     const currentTurn = request && sameAuthSession(state, request.session) && state?.turn?.requestId === request.id;
     q('.achmage-answer').hidden = !currentTurn || !!request?.completed || !!request?.structured || !!request?.kordoc || !state?.turn?.text || !!request?.router && looksLikeRouterAction(state.turn.text);
@@ -468,7 +469,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     const state = connection.current!;
     const card = withConversation(buildDocumentStateCard(deps.wasm, deps.input, template ? { id: template.id, name: template.name } : null), session);
     const templates = templateOffers(template);
-    const recent = history.filter(entry => entry.provider === state.selectedProvider && entry.at >= contextFrom).slice(-6).map(entry => ({ role: entry.role, text: entryText(entry) }));
+    const recent = conversationContext(history, state.selectedProvider, contextFrom);
     const payload = routerPrompt({ text, card, templates, history: recent });
     const id = crypto.randomUUID();
     const model = q<HTMLSelectElement>('.achmage-model').value || undefined, effort = routerEffort(), mask = maskPersonal(payload);
@@ -690,6 +691,8 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     if (route.kind === 'compose' || route.kind === 'selection-edit' || route.kind === 'insert') payload += '\n' + profilePromptLine(profile);
     const model = q<HTMLSelectElement>('.achmage-model').value || undefined;
     const selectedEffort = q<HTMLSelectElement>('.achmage-effort').value, effort = provider==='openai'&&selectedEffort?selectedEffort:undefined;
+    const priorContext = conversationContext(history, provider, contextFrom);
+    if (priorContext.length) payload += '\n대화 맥락(참고 데이터, 현재 요청이 우선): ' + JSON.stringify(priorContext);
     const mask = maskPersonal(payload, documentMask);
     request = { id, payload: mask.text, mask, model, effort, capture, structured, kordoc, ...(documentRead && !asWrittenDocument ? { blockPatch: { blocks: documentRead.blocks } } : {}), inPlace, styleContext, notices, ...(ctx.routedMs !== undefined ? { routedMs: ctx.routedMs } : {}), startedAt: performance.now(), session, provider: provider, completed: false, stale: false };
     if (ctx.rememberUser) remember({ id, provider: provider, role: 'user', text, at: Date.now() });
@@ -745,7 +748,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     if (!Object.values(saved).some(value => value)) { message('저장된 내 정보가 없습니다.', 'info'); return; }
     void navigator.clipboard.writeText(JSON.stringify(saved, null, 2)).then(() => message('저장된 내 정보를 JSON으로 클립보드에 복사했습니다.', 'info'), () => message('클립보드에 복사하지 못했습니다.'));
   };
-  button('new-conversation').onclick = () => { contextFrom = Date.now(); lastAnswer = undefined; lastApplied = undefined; choices = null; q('.achmage-account-menu').hidden = true; message('새 대화를 시작했습니다. 이전 대화는 화면에 남지만 AI에는 보내지 않습니다.', 'info'); render(); };
+  button('new-conversation').onclick = () => { if (connection.busy || connection.current?.busy || connection.current?.turn?.status === 'running' || applying) return; history = []; contextFrom = 0; request = null; prompt.value = ''; try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch { /* memory reset still works */ } lastAnswer = undefined; lastApplied = undefined; choices = null; q('.achmage-account-menu').hidden = true; message('새 대화를 시작했습니다. 문서와 계정 연결은 유지됩니다.', 'info'); render(); };
   button('clear-history').onclick = () => { if (confirm('이 기기에 보관된 모든 제공자의 대화를 지울까요? 문서는 바뀌지 않습니다.')) { history = []; try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch { /* memory still cleared */ } render(); } };
   button('account').onclick = () => { const element = q('.achmage-account-menu'); element.hidden = !element.hidden; button('account').setAttribute('aria-expanded', String(!element.hidden)); };
   button('tools').onclick = () => { const element = q('.achmage-more'); element.hidden = !element.hidden; button('tools').setAttribute('aria-expanded', String(!element.hidden)); };

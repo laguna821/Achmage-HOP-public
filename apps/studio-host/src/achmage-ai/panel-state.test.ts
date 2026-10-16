@@ -1,3 +1,4 @@
+import { conversationContext } from './panel-state';
 import { describe, it, expect } from 'vitest';
 import { panelWidth, loadHistory, saveHistory, addHistory, boundedHistory, acceptsCompletion, unwrapQuotedReply, CHAT_STORAGE_KEY, MAX_CHAT_BYTES, type ChatEntry } from './panel-state';
 import { registerPanelAction, watchPanelActions } from './panel-events';
@@ -22,4 +23,13 @@ describe('quoted reply cleanup', () => {
     expect(unwrapQuotedReply('"인용"', '"인용 원문"')).toBe('"인용"');
     expect(unwrapQuotedReply('그대로', '원문')).toBe('그대로');
   });
+});
+
+it('retains the course brief through repeated clarifications', () => {
+  const brief = '미디어콘텐츠 바이브코딩 ' + '설명'.repeat(400) + ' 협력기업 16주 PBL';
+  const entries = Array.from({length:30},(_,i)=>({id:String(i),provider:'openai' as const,role:'user' as const,text:i ? '수업개요와 교육목표부터' : brief,at:i}));
+  const context = conversationContext(entries,'openai');
+  expect(context[0].text).toBe(brief);
+  expect(context).toHaveLength(24);
+  expect(conversationContext([],'openai')).toEqual([]);
 });

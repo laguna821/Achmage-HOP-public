@@ -62,3 +62,21 @@ export function unwrapQuotedReply(reply: string, before: string): string {
   }
   return reply;
 }
+
+/** Preserve the original brief through clarification turns, within a bounded session budget. */
+export function conversationContext(entries: ChatEntry[], provider: ProviderId, since = 0): { role: 'user' | 'assistant'; text: string }[] {
+  const session = entries.filter(e => e.provider === provider && e.at >= since);
+  const chosen = session.length > 24 ? [session[0], ...session.slice(-23)] : session;
+  const first = chosen[0];
+  if (!first) return [];
+  const brief = {role:first.role,text:Array.from(first.text).slice(0,8000).join('')};
+  let remaining = 48000 - Array.from(brief.text).length;
+  const tail: {role:'user'|'assistant';text:string}[] = [];
+  for (const entry of chosen.slice(1).reverse()) {
+    if (!remaining) break;
+    const chars=Array.from(entry.text).slice(0,Math.min(8000,remaining));
+    remaining-=chars.length;
+    tail.unshift({role:entry.role,text:chars.join('')});
+  }
+  return [brief,...tail];
+}

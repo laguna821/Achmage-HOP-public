@@ -52,6 +52,7 @@ export function historyHarness(bytes: Uint8Array, options: { recover?: (bytes: U
     /** Undo stack depth, read by undoing on a copy-free path: count steps, then redo them back. */
     depth() { let n = 0; while (history.canUndo()) { history.undo(wasm); n++; } for (let i = 0; i < n; i++) history.redo(wasm); bus.emit('document-mutated'); return n; },
     select(startParagraph: number, start: number, endParagraph: number, end: number) { selection = { start: at(startParagraph, start), end: at(endParagraph, end) }; cursor = at(endParagraph, end); },
+    cellCaret(position: Position) { selection = null; cursor = {...position}; },
     caret(paragraph: number, offset: number) { selection = null; cursor = at(paragraph, offset); },
     undo() { const r = history.undo(wasm); if (r) cursor = r; bus.emit('document-mutated'); },
     redo() { const r = history.redo(wasm); if (r) cursor = r; bus.emit('document-mutated'); },

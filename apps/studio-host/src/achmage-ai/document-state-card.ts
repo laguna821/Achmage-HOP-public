@@ -15,7 +15,7 @@ export interface DocumentStateCard {
   /** Tables, pictures/shapes/fields, and page layout (header, footer, page numbers). */
   objects: { tables: number; other: number; layout: number };
   /** `calculations`: the local calculators that fit the selected text (금액 한글 병기, 공문 날짜 …). */
-  selection: null | { paragraphs: number; chars: number; inTable: boolean; preview: string; calculations: string[] };
+  selection: null | { paragraphs: number; chars: number; inTable: boolean; emptyCell?: boolean; preview: string; calculations: string[] };
   caret: null | { paragraphChars: number; preview: string };
   template: null | { id: string; name: string };
   /** Body text in reading order, tables as "[표 r×c] first row"; cut at the byte budget. */
@@ -87,7 +87,7 @@ export function buildDocumentStateCard(wasm: Wasm, input: Pick<InputHandler, 'ge
         parts.push(end > start ? attempt(() => wasm.getTextInCell!(a.sectionIndex, a.parentParaIndex!, a.controlIndex!, a.cellIndex!, p, start, end - start), '') : '');
       }
       const text = parts.join('\n');
-      card.selection = { paragraphs: parts.length, chars: Array.from(text).length, inTable: true, preview: clip(text, PREVIEW), calculations: calculatorChoices(text).map(c => c.label) };
+      card.selection = { paragraphs: parts.length, chars: Array.from(text).length, inTable: true, ...(x.cellParaIndex === y.cellParaIndex && x.charOffset === 0 && y.charOffset === 0 && attempt(() => wasm.getCellParagraphLength!(a.sectionIndex,a.parentParaIndex!,a.controlIndex!,a.cellIndex!,x.cellParaIndex!), -1) === 0 ? {emptyCell:true} : {}), preview: clip(text, PREVIEW), calculations: calculatorChoices(text).map(c => c.label) };
     } else if (!inBody(a) || !inBody(b)) card.selection = { paragraphs: 1, chars: 0, inTable: true, preview: '', calculations: [] };
     else if (a.sectionIndex === b.sectionIndex) {
       const parts: string[] = [];
@@ -104,6 +104,11 @@ export function buildDocumentStateCard(wasm: Wasm, input: Pick<InputHandler, 'ge
   if (caret && inBody(caret)) {
     const length = attempt(() => wasm.getParagraphLength(caret.sectionIndex, caret.paragraphIndex), 0);
     card.caret = { paragraphChars: length, preview: length ? clip(attempt(() => wasm.getTextRange(caret.sectionIndex, caret.paragraphIndex, 0, length), ''), 160) : '' };
+  }
+  // An empty, flat table-cell paragraph is an explicit insertion target, even without text to drag.
+  if (!selection && caret && caret.parentParaIndex !== undefined && caret.controlIndex !== undefined && caret.cellIndex !== undefined && caret.cellParaIndex !== undefined && !caret.isTextBox && (caret.cellPath?.length ?? 1) <= 1 && wasm.getCellParagraphLength) {
+    const length = attempt(() => wasm.getCellParagraphLength!(caret.sectionIndex, caret.parentParaIndex!, caret.controlIndex!, caret.cellIndex!, caret.cellParaIndex!), -1);
+    if (length === 0) card.selection = { paragraphs: 1, chars: 0, inTable: true, emptyCell: true, preview: '', calculations: [] };
   }
   return card;
 }

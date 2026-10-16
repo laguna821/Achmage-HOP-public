@@ -72,6 +72,8 @@ describe('outbound personal-data gate', () => {
     expect(maskSafeEnd(chars, 0)).toBe(0);
     expect(maskSafeEnd(chars, 100)).toBe(chars.length);
     expect(maskSafeEnd(Array.from('a'.repeat(200)), 10)).toBe(74);
+    const spaced = Array.from('전화 010 1234 5678 끝');
+    expect(maskSafeEnd(spaced, 7)).toBe(16);
   });
   it('restores tokens whose brackets the model rewrote', () => {
     const masked = maskPersonal('문의 a@example.com');

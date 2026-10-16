@@ -19,8 +19,8 @@ export function panelWidth(value: number): number { return Number.isFinite(value
 /** A user message keeps at most this much text in the history: a pasted 25-page manuscript must not push the whole history out. */
 export const MAX_STORED_ENTRY_CHARS = 8000;
 const storedEntry = (entry: ChatEntry): ChatEntry => {
-  const chars = Array.from(entry.text);
-  return entry.role !== 'user' || chars.length <= MAX_STORED_ENTRY_CHARS ? entry : { ...entry, text: `${chars.slice(0, MAX_STORED_ENTRY_CHARS).join('')}\n[…${chars.length - MAX_STORED_ENTRY_CHARS}자는 대화 기록에 저장하지 않았습니다]` };
+  const chars = Array.from(entry.text), cut = maskSafeEnd(chars, MAX_STORED_ENTRY_CHARS);
+  return entry.role !== 'user' || chars.length <= cut ? entry : { ...entry, text: `${chars.slice(0, cut).join('')}\n[…${chars.length - cut}자는 대화 기록에 저장하지 않았습니다]` };
 };
 export function boundedHistory(entries: ChatEntry[]): ChatEntry[] {
   const result = entries.slice(-100).map(storedEntry);
@@ -71,12 +71,13 @@ export function conversationContext(entries: ChatEntry[], provider: ProviderId, 
   const first = chosen[0];
   if (!first) return [];
   const firstChars = Array.from(first.text);
-  const brief = {role:first.role,text:firstChars.slice(0,maskSafeEnd(firstChars,8000)).join('')};
+  // Cuts extend to a mask-safe point (up to 64 characters), so they start 64 short of each budget.
+  const brief = {role:first.role,text:firstChars.slice(0,maskSafeEnd(firstChars,8000-64)).join('')};
   let remaining = 48000 - Array.from(brief.text).length;
   const tail: {role:'user'|'assistant';text:string}[] = [];
   for (const entry of chosen.slice(1).reverse()) {
-    if (remaining <= 0) break;
-    const all=Array.from(entry.text),chars=all.slice(0,maskSafeEnd(all,Math.min(8000,remaining)));
+    if (remaining <= 64) break;
+    const all=Array.from(entry.text),chars=all.slice(0,maskSafeEnd(all,Math.min(8000,remaining)-64));
     remaining-=chars.length;
     tail.unshift({role:entry.role,text:chars.join('')});
   }

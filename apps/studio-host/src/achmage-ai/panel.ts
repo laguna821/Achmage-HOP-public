@@ -22,7 +22,7 @@ import type { RhwpDocumentStateV1 } from '@/upstream/document-agent';
 import {kordocAuthoringPrompt,createKordocDocument,prepareKordocAuthoring,openRecoveredDocumentWindow} from './kordoc-authoring';
 import { installDocumentTemplates } from './template-picker';
 import { AS_WRITTEN_REQUEST, LOCAL_MANUSCRIPT_CHARS, MODEL_DOCUMENT_CHARS, REWRITE_REQUEST, asksOnlyForLook, manuscriptMarkdown, splitManuscript } from './manuscript';
-import { ensureDesktopFontsAvailable, resolveDesktopFont } from '../core/desktop-local-fonts';
+import { ensureDesktopFontsAvailable, detectDesktopFontEntries, resolveDesktopFont } from '../core/desktop-local-fonts';
 import { PANEL_MARKUP, AI_BADGE } from './panel-view';
 import { installInlineEditor } from './inline';
 import { installRuntimeTools } from './runtime-tools';
@@ -484,6 +484,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
       const result=await runWorkflow({text,history:prior,sources:workflowSources,selection:selection?{text:selection.before,exact:!!selection.multi}:null,focus:draft?.map.focus(deps.input.getCursorPosition()),templates:templateOffers(template),actions,recent:lastWorkflow?.identity===requestDocument?lastWorkflow.summary:undefined},draft,{
         ask:(payload,signal)=>workflowClient!.ask(payload,signal,{model:q<HTMLSelectElement>('.achmage-model').value||undefined,...(state.selectedProvider==='openai'?{reasoningEffort:q<HTMLSelectElement>('.achmage-effort').value||undefined}:{})}),
         progress:label=>{message(label,'info');render();},
+        fonts:async()=>[...new Set((await detectDesktopFontEntries()).map(f=>f.family))],
         commit:async d=>{if(d.fonts.length){const available=await ensureDesktopFontsAvailable(d.fonts);if(d.fonts.some(f=>!available.has(f)))throw Error('요청한 글꼴을 이 컴퓨터에서 찾지 못했습니다.');}if(controller.signal.aborted||!sameAuthSession(connection.current,session)||generationIdentity()!==requestDocument)throw Error('문서나 계정이 바뀌어 적용하지 않았습니다. 다시 요청하세요.');applying=true;render();try{return await d.commit(doc);}finally{applying=false;}},
         action:async call=>{
           if(!actions.includes(call.action))throw Error('현재 지원하는 작업이 아닙니다.');

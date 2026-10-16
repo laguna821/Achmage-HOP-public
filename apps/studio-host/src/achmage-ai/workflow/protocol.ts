@@ -2,6 +2,7 @@ import type {TextChange} from './edits';
 import type {ReadRequest} from './document-map';
 export type ToolCall=
  |({tool:'read'}&ReadRequest)
+ |{tool:'fonts';query?:string;offset?:number}
  |{tool:'source';offset?:number;messageId?:string}
  |{tool:'edit';changes:TextChange[]}
  |{tool:'format';ids:string[];format:unknown}
@@ -11,7 +12,7 @@ export type ToolCall=
  |{tool:'selection_format';format:unknown}
  |{tool:'checkbox';checked:boolean;tableId?:string;ids?:string[]}
  |{tool:'table';id:string;operation:string;index?:number;count?:number;startRow?:number;startCol?:number;endRow?:number;endCol?:number};
-const keys:Record<ToolCall['tool'],string[]>={read:['ids','query','offset','start'],source:['offset','messageId'],edit:['changes'],format:['ids','format'],answer:['text'],finish:['text'],action:['action','instruction','templateId'],selection:['text'],selection_format:['format'],checkbox:['checked','tableId','ids'],table:['id','operation','index','count','startRow','startCol','endRow','endCol']};
+const keys:Record<ToolCall['tool'],string[]>={read:['ids','query','offset','start'],fonts:['query','offset'],source:['offset','messageId'],edit:['changes'],format:['ids','format'],answer:['text'],finish:['text'],action:['action','instruction','templateId'],selection:['text'],selection_format:['format'],checkbox:['checked','tableId','ids'],table:['id','operation','index','count','startRow','startCol','endRow','endCol']};
 export function decodeTool(text:string):ToolCall {
  const cleaned=text.trim().replace(/^```(?:json)?\s*/u,'').replace(/\s*```$/u,'');let v:any;
  try{v=JSON.parse(cleaned);}catch{throw Error('JSON 객체 하나로 응답하세요. 설명은 answer.text에 넣으세요.');}

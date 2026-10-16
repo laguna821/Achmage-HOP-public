@@ -23,3 +23,10 @@ describe('provider-independent workflow loop',()=>{
  });
  it.each(['{"tool":"edit","shell":"rm","changes":[]}','{"tool":"read","offset":-1}','{"tool":"checkbox","checked":"false"}','{"tool":"answer"}'])('rejects malformed envelopes %s',text=>expect(()=>decodeTool(text)).toThrow());
 });
+it('recovers an unavailable font name through resource discovery before staging',async()=>{
+ const h=historyHarness(bodyDocument(['본문'])),d=new WorkflowDraft(h.wasm,h.adapter.identity());let step=0;try{const id=d.read().nodes[0].id;
+  const replies=[{tool:'format',ids:[id],format:{fontFamily:'신명조'}},{tool:'fonts',query:'신명조'},{tool:'format',ids:[id],format:{fontFamily:'HY신명조',fontSizePt:11}},{tool:'finish',text:'설치된 HY신명조를 적용합니다.'}];
+  const result=await runWorkflow({text:'신명조로',history:[]},d,{fonts:async()=>['HY신명조'],ask:async p=>{if(step===1)expect(p).toContain('fonts 도구');if(step===2)expect(p).toContain('HY신명조');return JSON.stringify(replies[step++]);},commit:d=>d.commit(h.adapter),action:async()=>{},progress:()=>{}},new AbortController().signal);
+  expect(result.changed).toBe(1);expect(JSON.parse(h.native.getCharPropertiesAt(0,0,0)).fontFamilies).toEqual(Array(7).fill('HY신명조'));
+ }finally{d.close();h.close();}
+});

@@ -5,6 +5,7 @@ export interface WorkflowHost {
  ask(prompt:string,signal:AbortSignal):Promise<string>;
  commit(draft:WorkflowDraft):Promise<{changed:number;message:string}>;
  action(call:Extract<ToolCall,{tool:'action'}>):Promise<void>;
+ fonts?():Promise<string[]>;
  extra?(draft:WorkflowDraft,call:ToolCall):unknown;
  progress(text:string):void;
 }
@@ -16,6 +17,7 @@ focus는 커서가 놓인 문단/셀 ID다. "여기"는 그 위치를 확인한�
 문서/대화 내용을 읽고 답변만 달라는 요청에는 answer로 답한다. 답변에서 작업 완료를 지어내지 않는다. 실제 완료는 앱의 영수증으로 표시된다.
 도구:
 read {ids?:string[],query?:string,offset?:number,start?:number}: 현재 문서 검색/조회. query는 찾을 짧은 본문 문자열. 표 ID로 읽으면 셀을 포함한다. nextOffset이 있으면 다음 페이지가 있다. complete=false 노드는 start로 나누어 더 읽는다. 임시본 수정 후 ID는 바뀌므로 다시 읽어라.
+fonts {query?:string,offset?:number}: 실제 설치된 글꼴 이름 검색. fontFamily 지정 전 반드시 조회하고 목록의 정확한 이름을 쓴다. 줄임말에 해당하는 실제 이름을 선택하고 사용자에게 알린다.
 source {offset?:number,messageId?:string}: 긴 사용자 원문을 12000자씩 읽는다. messageId가 있으면 sources 목록의 이전 사용자 원문을 읽는다. 후속 요청이 이전 원문을 가리키면 요약만 보고 작성하지 말고 해당 원문을 읽는다.
 edit {changes:[{id,text,before?}]}: 읽은 문단/셀 내용을 교체. before를 쓰면 그 유일한 부분만 바꾼다. 여러 칸은 한 묶음으로 수정. 변경 안 할 라벨은 포함하지 않는다. 원래 서식은 앱이 보존. 줄바꿈은 새 문단.
 selection {text}: 현재 선택 범위만 수정(선택이 있을 때).
@@ -52,12 +54,12 @@ export async function runWorkflow(context:WorkflowContext,draft:WorkflowDraft|nu
   try{
    let result:unknown;
    if(call.tool==='source'){const offset=call.offset??0,source=call.messageId?context.sources?.find(s=>s.id===call.messageId):undefined;if(call.messageId&&!source)throw Error('이전 원문을 찾지 못했습니다. 내용을 추측하지 말고 다시 요청하세요.');const content=source?Array.from(source.text):chars;result={text:content.slice(offset,offset+12000).join(''),offset,nextOffset:offset+12000<content.length?offset+12000:null,total:content.length};}
+   else if(call.tool==='fonts'){if(!host.fonts)throw Error('설치된 글꼴 조회가 연결되지 않았습니다.');const key=(s:string)=>s.normalize('NFKC').replace(/\s/gu,'').toLocaleLowerCase();const names=(await host.fonts()).filter(n=>!call.query||key(n).includes(key(call.query))),offset=call.offset??0;result={families:names.slice(offset,offset+80),total:names.length,nextOffset:offset+80<names.length?offset+80:null};}
    else if(!draft)throw Error('열린 문서가 없습니다. 답변하거나 새 문서 작업을 선택하세요.');
    else if(call.tool==='read')result=draft.read(call);
    else if(call.tool==='edit')result=draft.edit(call.changes);
    else if(call.tool==='selection')result=draft.editSelection(call.text);
-   else if(call.tool==='selection_format')result=draft.formatSelection(call.format);
-   else if(call.tool==='format')result=draft.format(call.ids,call.format);
+   else if(call.tool==='selection_format'||call.tool==='format'){const family=(call.format as {fontFamily?:unknown}|null)?.fontFamily;if(typeof family==='string'&&host.fonts&&!(await host.fonts()).includes(family))throw Error('설치된 정확한 글꼴명이 아닙니다. fonts 도구로 검색한 실제 이름을 사용하세요: '+family);result=call.tool==='format'?draft.format(call.ids,call.format):draft.formatSelection(call.format);}
    else if(call.tool==='table'||call.tool==='checkbox')result=draft.control(call);
    else if(host.extra)result=host.extra(draft,call);
    else throw Error('이 도구는 현재 연결되지 않았습니다. 다른 작업으로 대체하지 마세요.');

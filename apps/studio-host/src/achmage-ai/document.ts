@@ -1,3 +1,4 @@
+import { checkboxTargets, clearCheckboxTargets } from './checkbox-edit';
 import { executeTocRefresh, findToc } from './toc-pages';
 import { DocumentAgentController, collectTargetEvidence, parseApplyTextCommand, type RhwpApplyTextCommandV1, type RhwpDocumentStateV1 } from '@/upstream/document-agent';
 import type { WasmBridge, EventBus } from '@/upstream/core';
@@ -232,6 +233,16 @@ export class AiDocument {
    * step. If only that step fails, the snapshot is rolled back and the document is applied again without
    * page numbers, so the generated result is never lost; `tocFailure` says why.
    */
+  async clearCheckboxes(): Promise<{found:number;changed:number}> {
+    if(this.applying) throw Error('편집 중입니다.');
+    const identity=this.identity(),targets=checkboxTargets(this.wasm);
+    if(!targets.some(t=>t.value!==0)) return {found:targets.length,changed:0};
+    this.applying=true;let changed=0;
+    try { await this.snapshot(identity,'achmageClearCheckboxes',wasm=>{
+      if(!this.owns(identity)) throw Error('문서가 바뀌었습니다.');
+      changed=clearCheckboxTargets(wasm,targets);return this.input.getCursorPosition();
+    });return {found:targets.length,changed}; } finally {this.applying=false;}
+  }
   async applyWholeDocument(identity:RhwpDocumentStateV1,bytes:Uint8Array,options:{hideFirstPage:boolean;toc?:boolean}):Promise<Pick<WholeReplacement,'paragraphs'|'removedLayout'>&{toc?:{entries:number;pages:number[]};tocFailure?:string}>{
     if(this.applying||!this.owns(identity))throw Error('문서가 바뀌어 서식 적용을 멈췄습니다. 다시 요청하세요.');
     // Throws InPlaceReplacementUnsupported before any history or document mutation.

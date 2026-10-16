@@ -17,7 +17,7 @@ describe('intent router decisions', () => {
     expect(decodeRouterReply('{"action":"delete_everything"}', card(), templates).kind).toBe('invalid');
     expect(decodeRouterReply('{"action":', card(), templates).kind).toBe('invalid');
     const withTable = card({ objects: { tables: 1, other: 0, layout: 2 }, selection: { paragraphs: 1, chars: 5, inTable: false, preview: '본문', calculations: [] } });
-    expect(decodeRouterReply('{"action":"edit_whole_body"}', withTable, templates)).toEqual({ kind: 'invalid', reason: expect.stringContaining('recompose_document') });
+    expect(decodeRouterReply('{"action":"edit_whole_body"}', withTable, templates)).toEqual({ kind: 'invalid', reason: expect.stringContaining('기존 서식을 보존') });
     expect(decodeRouterReply('{"action":"format_selection"}', withTable, templates).kind).toBe('invalid');
     expect(decodeRouterReply('{"action":"recompose_document"}', card({ blank: true }), templates).kind).toBe('invalid');
   });

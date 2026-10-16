@@ -54,7 +54,7 @@ const POPOVER = '<form><header><strong class="inline-title">AI로 선택 영역 
   + '<small>Enter 보내기 · Shift+Enter 줄바꿈 · Esc 닫기 · 적용 후 Ctrl+Z로 되돌리기</small></form>';
 
 /** Inline AI editor that opens next to the selection; transport and atomic apply stay in the common panel. */
-export function installInlineEditor(deps: PanelDeps, doc: AiDocument): () => void {
+export function installInlineEditor(deps: PanelDeps, doc: AiDocument, workflow = true): () => void {
   const area = document.getElementById('editor-area');
   if (!area) return () => {};
   const trigger = document.createElement('button'); trigger.className = 'achmage-inline-trigger';
@@ -148,13 +148,16 @@ export function installInlineEditor(deps: PanelDeps, doc: AiDocument): () => voi
     try {
       // A selection that starts or ends inside a paragraph is offered as whole paragraphs; across paragraphs that is the default.
       const shape = doc.selectionShape();
-      expandBox.checked = !!shape?.partial && shape.paragraphs > 1; expand.hidden = !shape?.partial;
+      expandBox.checked = false; expand.hidden = !shape?.partial;
       q<HTMLElement>('.inline-expand-hint').textContent = shape?.partial ? '(선택이 문단 중간에서 끝납니다)' : '';
       mode = 'selection'; q('.inline-title').textContent = 'AI로 선택 영역 편집'; prompt.placeholder = EDIT_PLACEHOLDER;
       showSelection(expandBox.checked); setChips(SELECTION_CHIPS);
     } catch (error) {
       request.cancel();
-      if (selectsWholeDocument(deps.wasm, deps.input.getSelection())) {
+      if(workflow){
+        mode='caret';q('.inline-title').textContent='AI로 문서 작업';q('.inline-scope').textContent='기존 서식 유지';setChips([]);calc.hidden=true;prompt.placeholder=EDIT_PLACEHOLDER;
+        q('.inline-original').textContent='요청한 항목을 문서에서 찾아 수정합니다. 범위가 불분명하면 먼저 확인합니다.';
+      } else if (selectsWholeDocument(deps.wasm, deps.input.getSelection())) {
         // Tables and the cover cannot be edited as plain text, so the whole document is rewritten through the template engine.
         mode = 'whole'; q('.inline-title').textContent = 'AI로 문서 전체 편집'; q('.inline-scope').textContent = '표지·목차·표 포함'; setChips([]); calc.hidden = true; prompt.placeholder = EDIT_PLACEHOLDER;
         q('.inline-original').textContent = '선택한 문서 서식으로 문서 전체를 다시 구성해 이 창에 바로 반영합니다.';
@@ -228,7 +231,7 @@ export function installInlineEditor(deps: PanelDeps, doc: AiDocument): () => voi
   const unregisterMenu=registerInlineMenuProvider(()=>{
     trigger.hidden=true;
     const entry=aiMenuEntryFor(classifySelection(deps.wasm,deps.input)),entries:InlineMenuEntry[]=[];
-    if(entry)entries.push(entry.disabledReason?{label:entry.label,disabledReason:entry.disabledReason,choose:()=>{}}:{label:entry.label,choose:anchor=>entry.mode==='caret'?openCaret(anchor):open(anchor)});
+    if(entry)entries.push(entry.disabledReason&&!workflow?{label:entry.label,disabledReason:entry.disabledReason,choose:()=>{}}:{label:entry.label,choose:anchor=>entry.mode==='caret'?openCaret(anchor):open(anchor)});
     // A document with a contents page offers the page-number refresh directly (no AI, one Ctrl+Z).
     if(hasContentsHeading(deps.wasm))entries.push({label:'목차 쪽 번호 새로 고침 (AI 없이)',choose:()=>requestPanelTocRefresh()});
     return entries;

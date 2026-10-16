@@ -4,7 +4,7 @@ import type {WasmBridge} from '@/upstream/core';
 import {parseTextFormat,textFormatMods,type TextFormat} from '../text-format';
 import {bridgeFor,DocumentMap,type DocNode,type Handle} from './document-map';
 export interface TextChange {id:string;text:string;before?:string}
-export type PreparedOperation={kind:'edit';nodes:{node:DocNode;text:string}[]}|{kind:'format';nodes:DocNode[];format:TextFormat};
+export type PreparedOperation={kind:'selection';range:import('../multi-range').MultiRange;text:string}|{kind:'edit';nodes:{node:DocNode;text:string}[]}|{kind:'format';nodes:DocNode[];format:TextFormat};
 const identity={} as RhwpDocumentStateV1;
 function capture(w:WasmBridge,n:DocNode){
  const a=n.address,length=Array.from(n.text).length;
@@ -33,6 +33,7 @@ export function prepareFormat(map:DocumentMap,ids:string[],format:unknown):Prepa
 }
 export function executePrepared(engine:Handle,op:PreparedOperation):void {
  const w=bridgeFor(engine);
+ if(op.kind==='selection'){executeMultiRange(w,op.range,op.text);return;}
  if(op.kind==='edit'){
   // Preflight every source before the first mutation. A failed operation is discarded/rolled back by the owner.
   for(const {node} of op.nodes)if(readNode(engine,node)!==node.text)throw Error('편집 대상 내용이 바뀌었습니다.');

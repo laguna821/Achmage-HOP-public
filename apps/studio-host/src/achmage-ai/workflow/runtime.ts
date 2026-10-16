@@ -54,6 +54,7 @@ export async function runWorkflow(context:WorkflowContext,draft:WorkflowDraft|nu
    else if(!draft)throw Error('열린 문서가 없습니다. 답변하거나 새 문서 작업을 선택하세요.');
    else if(call.tool==='read')result=draft.read(call);
    else if(call.tool==='edit')result=draft.edit(call.changes);
+   else if(call.tool==='selection')result=draft.editSelection(call.text);
    else if(call.tool==='format')result=draft.format(call.ids,call.format);
    else if(host.extra)result=host.extra(draft,call);
    else throw Error('이 도구는 현재 연결되지 않았습니다. 다른 작업으로 대체하지 마세요.');

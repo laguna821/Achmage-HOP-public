@@ -1,3 +1,6 @@
+import {runWorkflow} from './workflow/runtime';
+import {WorkflowDraft} from './workflow/draft';
+import {WorkflowModelClient} from './workflow/provider-bridge';
 import { tidySelectedDraft } from './draft-tidy';
 import { describeTextFormat, type TextFormat } from './text-format';
 import { AiConnection, authSession, sameAuthSession, nativeTransport, shouldPoll, usageLabel, type AiAction, type AiTransport, type ProviderId } from './bridge';
@@ -56,11 +59,14 @@ function documentDraftSummary(markdown: string): string {
 }
 export interface PanelDeps { wasm: WasmBridge; input: InputHandler; eventBus: EventBus; view: CanvasView; dirty(): boolean; undo(): void }
 /** router: free-form chat messages are interpreted by the model (default); false keeps the local rules only. */
-export interface PanelOptions { router?: boolean; /** At launch, reselect the last provider and pick up its existing sign-in (default on). */ restoreSignIn?: boolean }
+export interface PanelOptions { workflow?:boolean; router?: boolean; /** At launch, reselect the last provider and pick up its existing sign-in (default on). */ restoreSignIn?: boolean }
 // This orchestration stays in one owner so request/account/document fences cannot diverge.
 // Grok is not listed: its CLI default model is used, and a status probe would reset a finished answer.
 const CATALOG_PROVIDERS=new Set<ProviderId>(['openai','claude','gemini']);
 export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeTransport, panelOptions: PanelOptions = {}): () => void {
+  const workflowEnabled=panelOptions.workflow!==false;
+  let workflowAbort:AbortController|null=null,workflowClient:WorkflowModelClient|undefined,retainedSelection:Capture|undefined;
+  let lastWorkflow:{identity:string;summary:string}|undefined;
   const routerEnabled = panelOptions.router !== false;
   const area = document.getElementById('editor-area');
   if (!area?.parentElement) throw new Error('editor area unavailable');
@@ -86,7 +92,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   const doc = new AiDocument(deps.wasm, deps.input, deps.eventBus, deps.view, deps.dirty, bytes => openRecoveredDocumentWindow(bytes, deps.wasm.fileName));
   // Content identity only (same fields as AiDocument.owns): saving (dirty) or re-pagination must not discard a result.
   const generationIdentity = () => { if (deps.wasm.pageCount === 0) return 'home'; const s = doc.identity(); return JSON.stringify([s.documentEpoch, s.changeSeq, s.documentSha256]); };
-  const stopInline = installInlineEditor(deps, doc);
+  const stopInline = installInlineEditor(deps, doc, workflowEnabled);
   const stopRuntime = installRuntimeTools();
   const stopTelegram = installTelegramSettings();
   let stopImage: () => void = () => {};
@@ -129,6 +135,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   const settle = (text: string, tone: 'error' | 'info') => publishPanelStatus({ working: false, final: true, message: { text, tone } });
   const message = (text: string, tone: 'error' | 'success' | 'info' = 'error') => { const element = q('.achmage-message'); element.textContent = text; element.dataset.tone = tone; if (text) publishPanelStatus({ working: publishedWorking, message: { text, tone } }); };
   const connection = new AiConnection(transport, render);
+  workflowClient=new WorkflowModelClient(connection);
   const setWidth = (value: number) => { width = panelWidth(value); panel.style.setProperty('--achmage-panel-width', width + 'px'); q('.achmage-resize').setAttribute('aria-valuenow', String(width)); };
   const saveWidth = () => { try { localStorage.setItem(PANEL_WIDTH_KEY, String(width)); } catch { /* optional preference */ } };
   setWidth(width);
@@ -157,7 +164,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   }
   function renderHistory(): void {
     const transcript = q('.achmage-transcript'), follow = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 80;
-    const visible = history.filter(entry => entry.provider === connection.current?.selectedProvider);
+    const visible = workflowEnabled?history:history.filter(entry => entry.provider === connection.current?.selectedProvider);
     const signature = JSON.stringify(visible); if (signature === renderedHistory) return;
     renderedHistory = signature; const host = q('.achmage-history'); host.replaceChildren();
     for (const entry of visible) {
@@ -188,9 +195,10 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   }
   function render(): void {
     if (disposed) return;
+    workflowClient?.accept(connection.current);
     restoreProvider();
     const state = connection.current, locked = connection.busy || state?.commandPending === true || applying;
-    const signed = state?.auth.status === 'signed_in', running = state?.turn?.status === 'running';
+    const signed = state?.auth.status === 'signed_in', running = state?.turn?.status === 'running' || !!workflowAbort;
     if (authSession(state) !== conversationSession) { conversationSession = authSession(state); lastAnswer = undefined; lastApplied = undefined; choices = null; }
     if (request && !sameAuthSession(state, request.session)) {
       request = null;
@@ -257,7 +265,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     button('cancel-login').hidden = state?.auth.status !== 'pending'; button('cancel-login').disabled = locked;
     button('logout').disabled = locked || state?.busy === true || !signed;
     // Signed out, a look-only recompose still runs (the app typesets it); anything else says to sign in first.
-    button('send').disabled = locked || state?.busy === true || composing || !prompt.value.trim() || signed && state?.selectedProvider==='openai'&&state.modelCatalogStatus!==undefined&&state.modelCatalogStatus!=='ready';
+    button('send').disabled = !!workflowAbort || locked || state?.busy === true || composing || !prompt.value.trim() || signed && state?.selectedProvider==='openai'&&state.modelCatalogStatus!==undefined&&state.modelCatalogStatus!=='ready';
     button('cancel-turn').hidden = !running; button('cancel-turn').disabled = locked;
     button('send').hidden = !!running;
     mode.disabled = locked || !!running; prompt.readOnly = locked;
@@ -279,7 +287,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     const currentTurn = request && sameAuthSession(state, request.session) && state?.turn?.requestId === request.id;
     q('.achmage-answer').hidden = !currentTurn || !!request?.completed || !!request?.structured || !!request?.kordoc || !state?.turn?.text || !!request?.router && looksLikeRouterAction(state.turn.text);
     q('.achmage-answer').textContent = currentTurn && !request?.structured && !request?.kordoc && !(request?.router && looksLikeRouterAction(state?.turn?.text || '')) ? restoredReply(request, state?.turn?.text || '').text : '';
-    q('.achmage-pending').hidden = !(state?.auth.status === 'pending' || currentTurn && running || applying);
+    q('.achmage-pending').hidden = !(!!workflowAbort || state?.auth.status === 'pending' || currentTurn && running || applying);
     const now = performance.now(), waited = request && !applying ? now - request.startedAt : 0;
     const silentFor = request && running ? now - (request.lastTextAt ?? request.startedAt) : 0, started = !!request?.lastTextLength;
     const stage = applying ? '문서에 반영하고 있어요' : request?.router ? '요청을 이해하고 있어요' : request?.blockPatch ? '바꿀 부분을 고르고 있어요' : request?.kordoc ? '서식에 맞춰 문서를 쓰고 있어요' : request?.structured ? '문서 내용을 준비하고 있어요' : '답변을 준비하고 있어요';
@@ -298,7 +306,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
       }
     }
     panel.classList.toggle('is-working', state?.auth.status === 'pending' || !!running || applying);
-    const working = !!running || applying || (!!request && !request.completed && !request.failed);
+    const working = !!workflowAbort || !!running || applying || (!!request && !request.completed && !request.failed);
     if (working !== publishedWorking) { publishedWorking = working; publishPanelStatus({ working }); }
   }
   async function applyResponse(completed: NonNullable<typeof request>, reply: string, asWritten = false): Promise<void> {
@@ -439,6 +447,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     // A broken saved template never blocks a request that does not need one (F12).
     try { template=documentTemplates?.current(); } catch { template=undefined; message('저장된 문서 서식을 읽지 못해 서식 없이 진행합니다. 서식 창에서 확인해 주세요.', 'info'); }
     // "문서 전체를 이 서식으로 바꿔줘" is typeset by the app: no sign-in, no routing turn, nothing sent anywhere.
+    if(workflowEnabled){await sendWorkflow(text,captured,template,instruction===undefined);return;}
     const look = lookOnlyRoute(text, captured, template, options.whole === true);
     if (composing || applying || connection.busy || state?.commandPending || state?.busy || !look && state?.auth.status !== 'signed_in') { message(busyMessage()); return; }
     const session = authSession(state);
@@ -455,6 +464,38 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
       return;
     }
     await startRouter(text, template, session, instruction === undefined);
+  }
+  async function sendWorkflow(text:string,captured:Capture|undefined,template:DocumentTemplate|undefined,clearPrompt:boolean):Promise<void>{
+    const state=connection.current,session=authSession(state);
+    if(!text)return;
+    if(!session||!state||workflowAbort||composing||applying||connection.busy||state.commandPending||state.busy){message(busyMessage());return;}
+    const controller=new AbortController();workflowAbort=controller;choices=null;request=null;
+    const requestDocument=generationIdentity();let draft:WorkflowDraft|null=null;
+    const prior=conversationContext(history.map(e=>({...e,provider:state.selectedProvider})),state.selectedProvider,contextFrom);
+    const id=crypto.randomUUID();remember({id,provider:state.selectedProvider,role:'user',text,at:Date.now()});if(clearPrompt)prompt.value='';
+    try{
+      let selection=captured;
+      if(!selection)try{selection=doc.captureSelection();}catch{selection=retainedSelection;}
+      if(selection?.multi&&generationIdentity()!==JSON.stringify([selection.multi.identity.documentEpoch,selection.multi.identity.changeSeq,selection.multi.identity.documentSha256]))selection=undefined;
+      if(deps.wasm.pageCount>0)draft=new WorkflowDraft(deps.wasm,doc.identity(),selection?.multi);
+      const actions=['write_new_document','restyle_document','refresh_toc','recompose_document','insert_at_caret','insert_answer','undo'];
+      const result=await runWorkflow({text,history:prior,selection:selection?{text:selection.before}:null,templates:templateOffers(template),actions,recent:lastWorkflow?.identity===requestDocument?lastWorkflow.summary:undefined},draft,{
+        ask:(payload,signal)=>workflowClient!.ask(payload,signal,{model:q<HTMLSelectElement>('.achmage-model').value||undefined,...(state.selectedProvider==='openai'?{reasoningEffort:q<HTMLSelectElement>('.achmage-effort').value||undefined}:{})}),
+        progress:label=>{message(label,'info');render();},
+        commit:async d=>{if(controller.signal.aborted||!sameAuthSession(connection.current,session)||generationIdentity()!==requestDocument)throw Error('문서나 계정이 바뀌어 적용하지 않았습니다. 다시 요청하세요.');applying=true;render();try{return await d.commit(doc);}finally{applying=false;}},
+        action:async call=>{
+          if(!actions.includes(call.action))throw Error('현재 지원하는 작업이 아닙니다.');
+          if(controller.signal.aborted||generationIdentity()!==requestDocument||!sameAuthSession(connection.current,session))throw Error('문서나 계정이 바뀌었습니다.');
+          if(call.action==='undo'){if(lastWorkflow?.identity!==requestDocument)throw Error('직전 AI 작업 뒤 문서가 바뀌어 자동으로 되돌리지 않았습니다. Ctrl+Z 기록을 확인하세요.');deps.undo();lastWorkflow=undefined;message('직전 AI 작업을 되돌렸습니다.','success');return;}
+          const chosen=call.templateId?findTemplate(call.templateId,template):template;
+          if(call.templateId&&!chosen)throw Error('선택한 서식을 찾을 수 없습니다.');
+          workflowAbort=null;
+          if(!await runOperation(call.action as OperationId,text,call.instruction,chosen,session,false))throw Error('작업을 시작하지 못했습니다. 표시된 원인을 확인하세요.');
+        },
+      },controller.signal);
+      if(!result.delegated){lastAnswer=result.text;remember({id:id+':result',provider:state.selectedProvider,role:'assistant',text:result.text,at:Date.now()});if(result.changed)lastWorkflow={identity:generationIdentity(),summary:result.text};message(result.text,result.changed?'success':'info');settle(result.text,'info');}
+    }catch(error){const text=error instanceof Error?error.message:'작업을 완료하지 못했습니다.';remember({id:id+':error',provider:state.selectedProvider,role:'assistant',text,at:Date.now()});message(text);settle(text,'error');}
+    finally{draft?.close();workflowAbort=null;render();}
   }
   /** A recompose of the open document that only asks for a new look, recognised without a model. */
   function lookOnlyRoute(text: string, captured: Capture | undefined, template: DocumentTemplate | undefined, whole: boolean): Route | undefined {
@@ -594,7 +635,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
       }catch(error){message(error instanceof Error?error.message:'체크박스를 해제하지 못했습니다.');return false;}
       finally{applying=false;render();}
     }
-    if (route.kind === 'restyle') return restyle(ctx.template, ctx.text);
+    if (route.kind === 'restyle') return restyle(ctx.template, ctx.routed?'':ctx.text);
     if (route.kind === 'text-format') return formatText(route.format);
     if (route.kind === 'tidy-draft') return tidyDraft(ctx.template);
     if (route.kind === 'calculate') return calculate(route.calc);
@@ -626,7 +667,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
       if (!chosen) { message('문서 서식 버튼에서 적용할 서식을 선택해 주세요. 현재 본문은 앱이 직접 읽습니다.'); return false; }
       if (chosen.pack?.strategy === 'fixed') { message(`'${chosen.name}'은 빈 양식 채우기 전용이라 문서 생성은 미지원입니다. 문서 서식 창의 '빈 양식 열기'를 쓰세요.`); return false; }
       try{
-        const resolved=resolveDocumentTemplate(chosen,text);styleContext=resolved.template;notices=[...resolved.notices,...extraNotices,...(fallback&&!template?[`선택한 문서 서식이 없어 '${chosen.name}' 서식으로 다시 구성했습니다.`]:[])];kordoc=generationIdentity();
+        const resolved=ctx.routed?{template:chosen,notices:[]}:resolveDocumentTemplate(chosen,text);styleContext=resolved.template;notices=[...resolved.notices,...extraNotices,...(fallback&&!template?[`선택한 문서 서식이 없어 '${chosen.name}' 서식으로 다시 구성했습니다.`]:[])];kordoc=generationIdentity();
         // The open document is read by the app, never retyped: as written (no model), or as numbered blocks the model patches.
         documentRead=recompose?documentManuscript(captureWholeDocumentContext(deps.wasm).sections):undefined;
         const wording=`${text}\n${ask}`;asWrittenDocument=!!documentRead&&asWritten&&!styleContext.pack&&asksOnlyForLook(wording);
@@ -723,7 +764,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     render();
   }
   for (const choice of panel.querySelectorAll<HTMLButtonElement>('[data-provider]')) choice.onclick = async () => {
-    if (choice.disabled) return;
+    if (choice.disabled || workflowAbort) return;
     const provider = choice.dataset.provider as ProviderId;
     loginIntent = { provider, until: Date.now() + 45_000 };
     if (connection.current?.selectedProvider !== provider && !await act({ type: 'select_provider', provider })) { loginIntent = null; return; }
@@ -732,12 +773,12 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
   };
   button('cancel-login').onclick = () => { loginIntent = null; void act({ type: 'cancel_login' }); };
   q<HTMLSelectElement>('.achmage-provider-switch').onchange = () => { loginIntent = null; const provider = q<HTMLSelectElement>('.achmage-provider-switch').value as ProviderId; savedProvider = null; void act({ type: 'select_provider', provider }).then(ok => { if (ok) saveProvider(localStorage, provider); }); };
-  button('logout').onclick = () => { request = null; void act({ type: 'logout' }); };
+  button('logout').onclick = () => { workflowAbort?.abort(); request = null; void act({ type: 'logout' }); };
   // Only providers whose official CLI lists models re-read the catalog; the others keep their status-only refresh.
   button('refresh').onclick = () => { const current=connection.current; if(current&&CATALOG_PROVIDERS.has(current.selectedProvider)&&current.auth.status==='signed_in')void act({type:'refresh_models'});else void refresh(); };
   q<HTMLSelectElement>('.achmage-model').onchange=()=>render();
   button('send').onclick = () => { void send(); };
-  button('cancel-turn').onclick = () => { const id = connection.current?.turn?.id; request = null; if (id) void act({ type: 'cancel_turn', turnId: id }); };
+  button('cancel-turn').onclick = () => { if(workflowAbort){workflowAbort.abort();return;} const id = connection.current?.turn?.id; request = null; if (id) void act({ type: 'cancel_turn', turnId: id }); };
   const profileHost = q('.achmage-profile-fields');
   for (const field of PROFILE_FIELDS) { const label = document.createElement('label'); label.textContent = field.label; const input = document.createElement('input'); input.setAttribute('data-profile', field.key); input.value = profile[field.key] ?? ''; label.append(input); profileHost.append(label); }
   q<HTMLTextAreaElement>('.achmage-profile-style').value = profile.styleNote ?? '';
@@ -757,7 +798,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     if (!Object.values(saved).some(value => value)) { message('저장된 내 정보가 없습니다.', 'info'); return; }
     void navigator.clipboard.writeText(JSON.stringify(saved, null, 2)).then(() => message('저장된 내 정보를 JSON으로 클립보드에 복사했습니다.', 'info'), () => message('클립보드에 복사하지 못했습니다.'));
   };
-  button('new-conversation').onclick = () => { if (connection.busy || connection.current?.busy || connection.current?.turn?.status === 'running' || applying) return; history = []; contextFrom = 0; request = null; prompt.value = ''; try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch { /* memory reset still works */ } lastAnswer = undefined; lastApplied = undefined; choices = null; q('.achmage-account-menu').hidden = true; message('새 대화를 시작했습니다. 문서와 계정 연결은 유지됩니다.', 'info'); render(); };
+  button('new-conversation').onclick = () => { if (workflowAbort || connection.busy || connection.current?.busy || connection.current?.turn?.status === 'running' || applying) return; history = []; contextFrom = 0; lastWorkflow=undefined;retainedSelection=undefined;request = null; prompt.value = ''; try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch { /* memory reset still works */ } lastAnswer = undefined; lastApplied = undefined; choices = null; q('.achmage-account-menu').hidden = true; message('새 대화를 시작했습니다. 문서와 계정 연결은 유지됩니다.', 'info'); render(); };
   button('clear-history').onclick = () => { if (confirm('이 기기에 보관된 모든 제공자의 대화를 지울까요? 문서는 바뀌지 않습니다.')) { history = []; try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch { /* memory still cleared */ } render(); } };
   button('account').onclick = () => { const element = q('.achmage-account-menu'); element.hidden = !element.hidden; button('account').setAttribute('aria-expanded', String(!element.hidden)); };
   button('tools').onclick = () => { const element = q('.achmage-more'); element.hidden = !element.hidden; button('tools').setAttribute('aria-expanded', String(!element.hidden)); };
@@ -807,7 +848,8 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     applying = true; render();
     void doc.apply(capture, placed).then(() => { lastApplied = undefined; message('출처 인용을 커서 위치에 넣었습니다(AI 없이). Ctrl+Z로 되돌릴 수 있습니다.', 'success'); }, error => message(error instanceof Error ? error.message : '인용을 넣지 못했습니다.')).finally(() => { applying = false; render(); });
   } });
+  const selectionOff=deps.eventBus.on('selection-changed',()=>{try{retainedSelection=doc.captureSelection();}catch{if(!(document.activeElement as HTMLElement|null)?.closest?.('.achmage-ai,.achmage-inline-popover'))retainedSelection=undefined;}});
   const offs = ['document-mutated','desktop-document-loaded','cursor-moved','selection-changed'].map(name => deps.eventBus.on(name, () => { if (request?.capture && !doc.isCurrent(request.capture)) request.stale = true; if (request?.structured && !doc.isStructuredCurrent(request.structured)) request.stale = true; render(); }));
   const timer = window.setInterval(() => { void refresh(); }, 500); render(); void refresh();
-  return () => { disposed = true; clearInterval(timer); offs.forEach(off => off()); stopResearch(); stopActions(); stopInline(); stopRuntime(); stopTelegram(); stopImage(); documentTemplates?.dispose();doc.dispose(); document.removeEventListener(PANEL_EDIT_EVENT, editListener); document.removeEventListener(PANEL_WHOLE_EDIT_EVENT, wholeListener); document.removeEventListener(PANEL_ASK_EVENT, askListener); document.removeEventListener(PANEL_RESTYLE_EVENT, restyleListener); document.removeEventListener(PANEL_TOC_EVENT, tocListener); document.removeEventListener('compositionstart', compositionStart, true); document.removeEventListener('compositionend', compositionEnd, true); workspace.before(area); workspace.remove(); opener.remove(); if (toolbar && toolbarTrack) toolbar.append(...Array.from(toolbarTrack.children)); toolbarScroll?.remove(); };
+  return () => { disposed = true; workflowAbort?.abort();workflowClient?.fail('창이 닫혀 요청을 중지했습니다.');selectionOff();clearInterval(timer); offs.forEach(off => off()); stopResearch(); stopActions(); stopInline(); stopRuntime(); stopTelegram(); stopImage(); documentTemplates?.dispose();doc.dispose(); document.removeEventListener(PANEL_EDIT_EVENT, editListener); document.removeEventListener(PANEL_WHOLE_EDIT_EVENT, wholeListener); document.removeEventListener(PANEL_ASK_EVENT, askListener); document.removeEventListener(PANEL_RESTYLE_EVENT, restyleListener); document.removeEventListener(PANEL_TOC_EVENT, tocListener); document.removeEventListener('compositionstart', compositionStart, true); document.removeEventListener('compositionend', compositionEnd, true); workspace.before(area); workspace.remove(); opener.remove(); if (toolbar && toolbarTrack) toolbar.append(...Array.from(toolbarTrack.children)); toolbarScroll?.remove(); };
 }

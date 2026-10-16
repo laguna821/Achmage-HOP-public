@@ -10,6 +10,7 @@ export class DocumentMap {
  readonly nodes:DocNode[]=[];
  readonly warnings:string[]=[];
  private observed=new Set<string>();
+ private coverage=new Map<string,[number,number][]>();
  constructor(readonly engine:Handle, readonly revision:string) {
   const controls=parse<{ctrlId:string;list:number;para:number;controlIndex:number}[]>(engine.getControls());
   if(controls.some(c=>c.list!==0))this.warnings.push('셀 안 개체·중첩 개체는 읽기/편집 지원 여부를 대상별로 확인합니다.');
@@ -41,7 +42,9 @@ export class DocumentMap {
   for(const n of chosen.slice(offset,offset+80)){
    const chars=Array.from(n.text),text=chars.slice(start,start+Math.min(3000,budget)).join('');
    if(text.length>budget&&nodes.length)break;
-   const complete=start===0&&text===n.text;if(complete)this.observed.add(n.id);
+   const intervals=[...(this.coverage.get(n.id)??[]),[Math.min(start,chars.length),Math.min(chars.length,start+Array.from(text).length)] as [number,number]].sort((a,b)=>a[0]-b[0]);
+   let end=0;for(const [a,b] of intervals){if(a>end)break;end=Math.max(end,b);}this.coverage.set(n.id,intervals);
+   const complete=end>=chars.length;if(complete)this.observed.add(n.id);
    nodes.push({...n,address:undefined,text,chars:chars.length,complete,...(!complete?{nextStart:start+Array.from(text).length}:{})});
    budget-=text.length+120;if(budget<=0)break;
   }

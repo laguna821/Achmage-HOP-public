@@ -12,7 +12,7 @@ export class WorkflowDraft {
  private closed=false;
  private committed=false;
  readonly id=crypto.randomUUID();
- constructor(readonly source:WasmBridge,readonly identity:RhwpDocumentStateV1){
+ constructor(readonly source:WasmBridge,readonly identity:RhwpDocumentStateV1,readonly selected?:import('../multi-range').MultiRange){
   const live=source.borrowDocumentHandle();if(!live)throw Error('열린 문서가 없습니다.');
   const Constructor=live.constructor as new(bytes:Uint8Array)=>Handle;
   this.engine=new Constructor(live.exportHwpx());this.map=new DocumentMap(this.engine,`${this.id}.0`);
@@ -25,6 +25,7 @@ export class WorkflowDraft {
   try{executePrepared(this.engine,op);const map=new DocumentMap(this.engine,`${this.id}.${this.sequence+1}`);this.operations.push(op);this.sequence++;this.map=map;return {staged:true,operationCount:this.operations.length,revision:this.map.revision,message:'임시본에서 검증했습니다. finish 전에는 원문이 바뀌지 않습니다.'};}
   catch(error){this.engine.restoreSnapshot(snapshot);throw error;}finally{this.engine.discardSnapshot(snapshot);}
  }
+ editSelection(text:string){if(!this.selected)throw Error('선택 범위가 없습니다. read로 항목을 찾거나 사용자에게 어느 부분인지 물어보세요.');if(this.operations.length)throw Error('선택은 작업 시작 시점의 범위입니다. 다른 변경 뒤에는 새 문서 ID로 편집하세요.');return this.stage({kind:'selection',range:structuredClone(this.selected),text});}
  get pending(){return this.operations.length;}
  async commit(doc:AiDocument){
   this.assertOpen();if(this.committed)throw Error('이미 반영한 요청입니다.');
@@ -36,7 +37,7 @@ export class WorkflowDraft {
    if(new DocumentMap(engine,'verify').fingerprint()!==expected)throw Error('실제 편집 결과가 검증한 임시본과 다릅니다.');
   });
   this.committed=true;
-  return {changed:operations.reduce((n,op)=>n+op.nodes.length,0),message:'요청한 변경을 반영하고 결과를 확인했습니다. Ctrl+Z 한 번으로 되돌릴 수 있습니다.'};
+  return {changed:operations.reduce((n,op)=>n+(op.kind==='selection'?1:op.nodes.length),0),message:'요청한 변경을 반영하고 결과를 확인했습니다. Ctrl+Z 한 번으로 되돌릴 수 있습니다.'};
  }
  private assertOpen(){if(this.closed)throw Error('종료된 작업입니다. 다시 요청하세요.');}
  close(){if(!this.closed){this.closed=true;this.engine.free();}}

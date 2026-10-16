@@ -36,3 +36,7 @@ describe('atomic document workflow',()=>{
   }finally{d.close();h.close();}
  });
 });
+it('keeps partial selection boundaries exactly, including emoji',async()=>{
+ const h=historyHarness(bodyDocument(['앞😀 선택 뒤','보존']));h.select(0,3,0,6);const c=h.adapter.captureSelection();
+ const d=new WorkflowDraft(h.wasm,h.adapter.identity(),c.multi);try{d.editSelection('수정');await d.commit(h.adapter);expect(h.native.getTextRange(0,0,0,h.native.getParagraphLength(0,0))).toBe('앞😀 수정뒤');h.undo();expect(h.native.getTextFileUnicode()).toContain('앞😀 선택 뒤');}finally{d.close();h.close();}
+});

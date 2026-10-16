@@ -19,7 +19,7 @@ function bridge(native:HwpDocument):WasmBridge {
 }
 describe('checkbox commands',()=>{
  it('accepts explicit whole document clearing, not questions or partial/negative requests',()=>{
-  expect(asksToClearCheckboxes('네 능력을 시험해보자. 지금 연 문서에서 체크박스를 전부 해제해봐')).toBe(true);
+  for (const s of ['네 능력을 시험해보자. 지금 연 문서에서 체크박스를 전부 해제해봐','네 능력을 시험해보자. 이 한글 문서의 모든 체크박스를 해제해봐','모든 체크박스를 해제해주세요']) expect(asksToClearCheckboxes(s)).toBe(true);
   for(const s of ['체크박스 전부 해제하지 말아줘','체크박스 전부 해제해줘?','체크박스 전부 해제하는 방법 알려줘','이 표 체크박스 전부 해제해줘','"체크박스 전부 해제해줘"','선택한 체크박스 전체 해제해줘']) expect(asksToClearCheckboxes(s)).toBe(false);
  });
  for(const sample of ['form-01.hwp','hwpx/form-002.hwpx']) it(`native checkbox changes preserve text and undo: ${sample}`,()=>{

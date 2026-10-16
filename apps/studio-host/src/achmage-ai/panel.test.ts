@@ -58,9 +58,9 @@ afterEach(()=>{stop?.();vi.useRealTimers();vi.unstubAllGlobals();});
 async function start(pageCount=1,options:PanelOptions={router:false,restoreSignIn:false},input?:unknown){const wasm={pageCount};stop=installAiPanel({wasm,input,eventBus:{on:()=>()=>{}},undo:vi.fn()} as unknown as PanelDeps,{state:async()=>state,action},options);await flush();return wasm;}
 describe('actual AI panel handlers',()=>{
   beforeEach(()=>{templateGuard.current=undefined;kordocGuard.prepare.mockReset().mockResolvedValue(['함초롬바탕']);kordocGuard.create.mockReset().mockResolvedValue({pages:3,warnings:[]});wholeGuard.capture.mockReset().mockReturnValue({sections:[{index:0,paragraphs:[{index:0,text:'열린 문서의 고유 본문',tables:[]},{index:1,text:'',tables:[{controlIndex:0,charOffset:0,rowCount:1,colCount:2,cells:[{index:0,row:0,col:0,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'안건'}]},{index:1,row:0,col:1,rowSpan:1,colSpan:1,paragraphs:[{index:0,text:'검토'}]}]}]}]}],paragraphs:4,tables:1,chars:15});});
-  it('clears all checkboxes without a template or AI routing',async()=>{
+  it.each(['네 능력을 시험해보자. 지금 연 문서에서 체크박스를 전부 해제해봐','네 능력을 시험해보자. 이 한글 문서의 모든 체크박스를 해제해봐'])('clears checkboxes locally: %s',async(text)=>{
     documentGuard.clearCheckboxes.mockClear();await start(1,{router:true,restoreSignIn:false});
-    q('.achmage-prompt').value='네 능력을 시험해보자. 지금 연 문서에서 체크박스를 전부 해제해봐';q('.achmage-prompt').dispatchEvent(event('input'));
+    q('.achmage-prompt').value=text;q('.achmage-prompt').dispatchEvent(event('input'));
     await btn('send').click();await flush();
     expect(documentGuard.clearCheckboxes).toHaveBeenCalledOnce();
     expect(action.mock.calls.filter(([,a])=>a.type==='send')).toHaveLength(0);

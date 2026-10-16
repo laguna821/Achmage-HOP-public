@@ -155,6 +155,8 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     return restorePersonal(text, active.mask);
   }
   /** What a chat entry says to a reader: validated edit plans as their body text, tabs as spaces. */
+  /** The conversation as shown in the panel: edit answers are their text, never the raw document JSON. */
+  const visibleHistory = (): ChatEntry[] => history.map(entry => ({ ...entry, text: entryText(entry) }));
   function entryText(entry: ChatEntry): string {
     let visibleText = entry.text;
     if (entry.role === 'assistant') {
@@ -473,7 +475,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     if(!session||!state||workflowAbort||composing||applying||connection.busy||state.commandPending||state.busy){message(busyMessage());return;}
     const controller=new AbortController();workflowAbort=controller;choices=null;request=null;
     const requestDocument=generationIdentity();let draft:WorkflowDraft|null=null;
-    const prior=conversationContext(history.map(e=>({...e,provider:state.selectedProvider})),state.selectedProvider,contextFrom);
+    const prior=conversationContext(visibleHistory().map(e=>({...e,provider:state.selectedProvider})),state.selectedProvider,contextFrom);
     const id=crypto.randomUUID();workflowSources.push({id,text});remember({id,provider:state.selectedProvider,role:'user',text,at:Date.now()});if(clearPrompt)prompt.value='';
     try{
       let selection=captured;
@@ -513,7 +515,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     const state = connection.current!;
     const card = withConversation(buildDocumentStateCard(deps.wasm, deps.input, template ? { id: template.id, name: template.name } : null), session);
     const templates = templateOffers(template);
-    const recent = conversationContext(history, state.selectedProvider, contextFrom);
+    const recent = conversationContext(visibleHistory(), state.selectedProvider, contextFrom);
     const payload = routerPrompt({ text, card, templates, history: recent });
     const id = crypto.randomUUID();
     const model = q<HTMLSelectElement>('.achmage-model').value || undefined, effort = routerEffort(), mask = maskPersonal(payload);
@@ -744,7 +746,7 @@ export function installAiPanel(deps: PanelDeps, transport: AiTransport = nativeT
     if (route.kind === 'compose' || route.kind === 'selection-edit' || route.kind === 'insert') payload += '\n' + profilePromptLine(profile);
     const model = q<HTMLSelectElement>('.achmage-model').value || undefined;
     const selectedEffort = q<HTMLSelectElement>('.achmage-effort').value, effort = provider==='openai'&&selectedEffort?selectedEffort:undefined;
-    const priorContext = conversationContext(history, provider, contextFrom);
+    const priorContext = conversationContext(visibleHistory(), provider, contextFrom);
     if (priorContext.length) payload += '\n대화 맥락(참고 데이터, 현재 요청이 우선): ' + JSON.stringify(priorContext);
     const mask = maskPersonal(payload, documentMask);
     request = { id, payload: mask.text, mask, model, effort, capture, structured, kordoc, ...(documentRead && !asWrittenDocument ? { blockPatch: { blocks: documentRead.blocks } } : {}), inPlace, styleContext, notices, ...(ctx.routedMs !== undefined ? { routedMs: ctx.routedMs } : {}), startedAt: performance.now(), session, provider: provider, completed: false, stale: false };

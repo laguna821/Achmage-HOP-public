@@ -95,6 +95,16 @@ export class AiDocument {
     const selection = this.input.getSelection();
     return JSON.stringify({ cursor: logical(this.input.getCursorPosition()), selection: selection && { start: logical(selection.start), end: logical(selection.end) } });
   }
+  /** One verified workflow, even when the model needed several inspection/edit rounds. */
+  async applyWorkflow(identity:RhwpDocumentStateV1, operation:(wasm:WasmBridge)=>void):Promise<void> {
+    if(this.applying||!this.owns(identity))throw Error('작업 중 문서가 변경되어 반영하지 않았습니다. 다시 요청하세요.');
+    this.applying=true;
+    try { await this.snapshot(identity,'achmageWorkflow',wasm=>{
+      if(!this.owns(identity))throw Error('문서가 변경되었습니다.');
+      operation(wasm);
+      return {sectionIndex:0,paragraphIndex:0,charOffset:0};
+    }); } finally { this.applying=false; }
+  }
   capture(): Capture {
     if (!this.input.getSelection() && this.emptyCellCaret()) return this.captureSelection();
     if (this.wasm.pageCount === 0) throw new Error('문서를 먼저 여세요.');

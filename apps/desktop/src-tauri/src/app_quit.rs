@@ -97,11 +97,12 @@ pub(crate) fn handle_run_event(app: &AppHandle, event: &RunEvent) -> Result<(), 
             api.prevent_exit();
             request_app_quit(app)
         }
+        // The engine window is not part of the quit: its closing must not move the quit to the next window.
         RunEvent::WindowEvent {
             label,
             event: tauri::WindowEvent::Destroyed,
             ..
-        } => handle_quit_window_destroyed(app, label),
+        } if crate::kordoc_host::is_document_window(label) => handle_quit_window_destroyed(app, label),
         _ => Ok(()),
     }
 }
@@ -138,7 +139,7 @@ fn emit_app_quit_request(app: &AppHandle, label: &str) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn ordered_quit_labels(app: &AppHandle) -> Vec<String> {
-    let mut labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+    let mut labels: Vec<String> = crate::windows::document_windows(app).keys().cloned().collect();
     labels.sort();
     if let Some(target) = crate::windows::target_window_label(app) {
         labels.retain(|label| label != &target);

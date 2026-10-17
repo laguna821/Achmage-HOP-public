@@ -50,6 +50,7 @@ Thumbs.db
 # Build-owned pinned Kordoc/Node runtime; package sources and lockfiles are tracked separately.
 /apps/desktop/src-tauri/resources/runtime/
 /apps/desktop/src-tauri/resources/kordoc-engine/
+/apps/desktop/src-tauri/resources/kordoc-web/
 /apps/desktop/src-tauri/resources/kordoc-runtime.json
 /apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.md
 

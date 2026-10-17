@@ -133,6 +133,11 @@ const fontKeys = ['OFL-1.1.txt', 'GUST-Font-License.txt'].map((name) => addText(
 for (const row of crates.filter((r) => r.name === 'webview2-com-sys')) {
   row.keys.push(addText(path.join(root, 'licenses', 'Microsoft-WebView2-SDK-LICENSE.txt'), `${row.name} ${row.version} (Microsoft WebView2 loader)`));
 }
+// pako's zlib port carries the zlib copyright in lib/zlib/README rather than in a license file.
+for (const row of [...studio, ...rhwpStudioPackages, ...kordoc].filter((r) => r.name === 'pako')) {
+  const readme = path.join(root, 'apps/kordoc-engine/node_modules/pako/lib/zlib/README');
+  if (row.version === '1.0.11' && fs.existsSync(readme)) row.keys.push(addText(readme, `${row.name} ${row.version} (zlib port)`));
+}
 // Packages whose distribution carries no license file: the standard text of their declared license, with the
 // authors and repository from their metadata in the tables above.
 for (const row of [...crates, ...studio, ...rhwpStudioPackages, ...kordoc].filter((r) => !r.keys.length)) {
@@ -151,9 +156,9 @@ const body = [
   ...own.map(([name, keys]) => `- ${name}: ${refs(keys)}`),
   fs.existsSync(rhwpThirdParty) ? '- rhwp\'s own third-party list follows the license texts at the end of this file.' : '',
   '',
-  '## Node.js (runtime of the Kordoc document engine)',
+  '## Node.js (fallback runtime of the Kordoc document engine)',
   '',
-  'Node.js v24 is installed with the app as `runtime/node`; its license (below, at the end) also covers the components Node.js bundles.',
+  'Node.js v24 is installed with the app as `runtime/node`; its license (below, at the end) also covers the components Node.js bundles. The Kordoc WebView worker also contains an EventEmitter adapted from Node.js `lib/events.js` under this license.',
   '',
   'Source code of the MPL-2.0 packages listed below is available from their registries under the same name and version; a patched copy marked as such is in the rhwp repository at the path given.',
   '',

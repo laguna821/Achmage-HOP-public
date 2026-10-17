@@ -569,6 +569,7 @@ impl ChatBackend for AppBackend {
             .app
             .webview_windows()
             .into_iter()
+            .filter(|(label, _)| crate::kordoc_host::is_document_window(label))
             .map(|(label, window)| OpenDocument {
                 title: document_title(&window.title().unwrap_or_default()),
                 focused: window.is_focused().unwrap_or(false),
@@ -757,6 +758,12 @@ pub(crate) fn keep_running_on_exit(app: &AppHandle, explicit_exit: bool) -> bool
     })
 }
 
+/// Whether a quit from the tray is in progress (no new document engine job starts then).
+pub(crate) fn quitting(app: &AppHandle) -> bool {
+    app.try_state::<TelegramState>()
+        .is_some_and(|state| lock(&state.service.quit).quitting())
+}
+
 /// `Exit` hook: stop polling before the process ends.
 pub(crate) fn shutdown(app: &AppHandle) {
     if let Some(state) = app.try_state::<TelegramState>() {
@@ -811,7 +818,11 @@ fn quit(app: &AppHandle) {
         app.exit(0);
         return;
     };
-    let windows = app.webview_windows();
+    // A document engine job for Telegram in the hidden engine window would otherwise hold the process open.
+    if let Some(host) = app.get_webview_window(crate::kordoc_host::HOST_LABEL) {
+        let _ = host.destroy();
+    }
+    let windows = crate::windows::document_windows(app);
     lock(&state.service.quit).begin(windows.keys().cloned());
     if windows.is_empty() {
         let (app, service) = (app.clone(), state.service.clone());

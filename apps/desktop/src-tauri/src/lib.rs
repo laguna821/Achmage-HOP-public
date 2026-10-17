@@ -4,6 +4,7 @@ mod achmage_research;
 mod achmage_runtime;
 mod achmage_telegram;
 mod kordoc;
+mod kordoc_host;
 mod kordoc_process;
 mod commands;
 mod font_catalog;
@@ -59,12 +60,14 @@ pub fn run() {
         .manage(achmage_research::ResearchState::default())
         .manage(achmage_runtime::RuntimeState::default())
         .manage(kordoc::KordocState::default())
+        .manage(kordoc_host::KordocHost::default())
         .on_window_event(|window,event| {
             achmage_telegram::on_window_event(window.app_handle(), window.label(), event);
             if matches!(event,tauri::WindowEvent::Destroyed) {
                 achmage_ai::close(&window.state::<achmage_ai::AiState>(),window.label());
                 achmage_research::close(&window.state::<achmage_research::ResearchState>(),window.label());
                 kordoc::close(&window.state::<kordoc::KordocState>(),window.label());
+                kordoc_host::window_destroyed(window.app_handle(), window.label());
             }
         })
         .plugin(tauri_plugin_log::Builder::new().build())
@@ -72,11 +75,16 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // The engine window stays hidden: the plugin would otherwise restore it as a visible, focused window.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&[kordoc_host::HOST_LABEL])
+                .build(),
+        )
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let paths = document_paths_from_args(&args, &cwd);
             // HOP may run only in the tray (Telegram background mode); a relaunch shows a window.
-            let no_windows = app.webview_windows().is_empty();
+            let no_windows = windows::document_windows(app).is_empty();
             if paths.is_empty() {
                 if no_windows && !achmage_telegram::is_background_launch(&args) {
                     achmage_telegram::show_window(app);
@@ -112,6 +120,8 @@ pub fn run() {
             #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
             updates::install_startup_update_check(app.handle());
             achmage_telegram::install(app.handle(), background);
+            #[cfg(debug_assertions)]
+            kordoc_host::install_selftest(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -122,6 +132,8 @@ pub fn run() {
             kordoc::achmage_kordoc,
             kordoc::achmage_kordoc_prepare_generated,
             kordoc::achmage_kordoc_open_generated,
+            kordoc_host::achmage_kordoc_host_next,
+            kordoc_host::achmage_kordoc_host_reply,
             achmage_telegram::achmage_telegram_status,
             achmage_telegram::achmage_telegram_set_token,
             achmage_telegram::achmage_telegram_clear_token,
@@ -173,6 +185,11 @@ pub fn run() {
                 api.prevent_exit();
                 return;
             }
+            // Closing the engine window of a Telegram job leaves HOP as windowless as it was before the job.
+            if code.is_none() && kordoc_host::stay_after_engine_window(app) {
+                api.prevent_exit();
+                return;
+            }
         }
         if matches!(event, RunEvent::Exit) {
             achmage_telegram::shutdown(app);
@@ -186,7 +203,7 @@ pub fn run() {
                     .filter_map(|url| url.to_file_path().ok())
                     .filter_map(document_path_from_path)
                     .collect();
-                let show = !paths.is_empty() && app.webview_windows().is_empty();
+                let show = !paths.is_empty() && windows::document_windows(app).is_empty();
                 queue_open_paths(app, paths);
                 if show {
                     achmage_telegram::show_window(app);
@@ -198,7 +215,7 @@ pub fn run() {
                 ..
             } = &event
             {
-                if app.webview_windows().is_empty() {
+                if windows::document_windows(app).is_empty() {
                     achmage_telegram::show_window(app);
                 }
             }

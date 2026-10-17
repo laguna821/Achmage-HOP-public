@@ -8,10 +8,13 @@
     "start": "node worker.mjs"
   },
   "dependencies": {
+    "@noble/hashes": "2.4.0",
     "@xmldom/xmldom": "0.9.12",
+    "buffer": "6.0.3",
     "jszip": "3.10.1",
     "kordoc": "4.21.31",
-    "markdown-it": "14.3.0"
+    "markdown-it": "14.3.0",
+    "pako": "1.0.11"
   },
   "engines": {
     "node": ">=24"

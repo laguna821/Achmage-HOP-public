@@ -1,17 +1,30 @@
 import { invoke } from '@tauri-apps/api/core';
+import { showToast } from '@/ui/toast';
 import { parseDocumentTemplate, templateLayout, type DocumentTemplate } from './document-templates';
+import { createKordocWebEngine, KordocEngineError, type KordocWebEngine } from './kordoc-web-engine';
 
 export interface KordocPage {svg:string;width:number;height:number}
 export interface KordocDocument {engine:{name:'kordoc';version:'4.21.31';sourceCommit:string};hwpxBase64:string;sha256:string;pages:KordocPage[];/** Whole document; `pages` previews at most the first 100. */pageCount?:number;warnings:string[];validation:{ok:boolean;issues:unknown[];entryCount:number};fontFamilies:string[];fontFamiliesScope:'all-language-font-references-of-used-run-charPr'}
 export interface KordocAgency {name:string;reportAvailable:boolean;pressAvailable:boolean;reportUsesCommonFallback:boolean;style:{report:Record<string,unknown>|null;press:Record<string,unknown>|null;band:Record<string,unknown>|null};fontFamilies:string[];fontFamiliesByPreset:Record<string,string[]>;fontFamiliesScope:'agency-declared-including-common-fallback-not-all-preset-fonts'}
 export interface KordocCapabilities {engine:{name:string;version:string;sourceCommit:string};presets:string[];coverPresets:string[];tocPresets:string[];coverTocPresets:string[];agencyPresets:string[];agencies:KordocAgency[];agencyRoleOverrides:string[];tocPageNumbers:boolean;ocr:boolean;network:boolean}
 export type KordocTransport=(input:Record<string,unknown>)=>Promise<unknown>;
-let queueTail:Promise<void>=Promise.resolve(),queued=0;
+let queueTail:Promise<void>=Promise.resolve(),queued=0,web:KordocWebEngine|undefined,nodeFallback=false;
+/** The engine runs in this window's worker. Only if that worker cannot start at all does this test build fall back
+ * to the Node runtime still installed with the app, and it says so once. */
+async function engineRequest(input:Record<string,unknown>):Promise<unknown>{
+ if(!nodeFallback){
+  try{web??=createKordocWebEngine();return await web.request(input);}
+  catch(error){if(!(error instanceof KordocEngineError)||error.code!=='worker_unavailable')throw error;}
+  nodeFallback=true;
+  try{showToast({message:'앱에 들어 있는 문서 엔진을 시작하지 못해 예비 엔진(Node)으로 처리합니다.',durationMs:0,confirmLabel:'확인'});}catch{/* no document UI in this window */}
+ }
+ return invoke('achmage_kordoc',{input});
+}
 /** One window has one ordered lane; other-window native busy errors remain explicit. No retries. */
 export const queuedKordocRequest:KordocTransport=input=>{
  if(queued>=4)return Promise.reject(Error('문서 엔진 요청이 대기 중입니다. 잠시 후 다시 시도하세요.'));
  let frozen:Record<string,unknown>;try{if(new TextEncoder().encode(JSON.stringify(input)).length>16*1024*1024)throw Error('문서 요청 크기 제한을 넘었습니다.');frozen=structuredClone(input);}catch(error){return Promise.reject(error);}
- queued++;const result=queueTail.then(()=>invoke('achmage_kordoc',{input:frozen})).catch(error=>{throw error instanceof Error?error:Error(typeof error==='string'?error:'문서 엔진 연결을 확인하지 못했습니다.');});
+ queued++;const result=queueTail.then(()=>engineRequest(frozen)).catch(error=>{throw error instanceof Error?error:Error(typeof error==='string'?error:'문서 엔진 연결을 확인하지 못했습니다.');});
  queueTail=result.then(()=>undefined,()=>undefined).finally(()=>{queued--;});return result;
 };
 const MAX=32*1024*1024;

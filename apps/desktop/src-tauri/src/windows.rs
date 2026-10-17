@@ -205,8 +205,15 @@ fn document_paths(paths: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
+/// The document windows: every window except the hidden Kordoc engine window.
+pub fn document_windows(app: &AppHandle) -> std::collections::HashMap<String, tauri::WebviewWindow> {
+    let mut windows = app.webview_windows();
+    windows.retain(|label, _| crate::kordoc_host::is_document_window(label));
+    windows
+}
+
 pub fn target_window_label(app: &AppHandle) -> Option<String> {
-    let windows = app.webview_windows();
+    let windows = document_windows(app);
     windows
         .iter()
         .find(|(_, window)| window.is_focused().unwrap_or(false))

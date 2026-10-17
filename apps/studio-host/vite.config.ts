@@ -18,6 +18,10 @@ const rhwpWasmModule = normalizePath(resolve(import.meta.dirname, 'vendor/rhwp-c
 const rhwpWasmDir = dirname(rhwpWasmModule);
 const rhwpWasmPackage = JSON.parse(readFileSync(resolve(rhwpWasmDir, 'package.json'), 'utf-8'));
 const fontAssetsDir = resolve(import.meta.dirname, '../../assets/fonts');
+// The Kordoc engine's WebView worker, built and checked against the Node worker by
+// scripts/achmage/prepare-kordoc-runtime.mjs. Release builds set HOP_REQUIRE_KORDOC_WEB=1, so a missing worker fails
+// the build instead of shipping an app whose document engine cannot start.
+const kordocWebWorker = resolve(import.meta.dirname, '../desktop/src-tauri/resources/kordoc-web/engine-worker.js');
 
 function hopFontAssets(): Plugin {
   return {
@@ -54,6 +58,33 @@ function hopFontAssets(): Plugin {
   };
 }
 
+function kordocWebWorkerAsset(): Plugin {
+  return {
+    name: 'achmage-kordoc-web-worker',
+    configureServer(server) {
+      server.middlewares.use('/kordoc/engine-worker.js', (_req, res, next) => {
+        if (!existsSync(kordocWebWorker)) {
+          next();
+          return;
+        }
+        res.setHeader('Content-Type', 'text/javascript');
+        createReadStream(kordocWebWorker).pipe(res);
+      });
+    },
+    closeBundle() {
+      if (!existsSync(kordocWebWorker)) {
+        if (process.env.HOP_REQUIRE_KORDOC_WEB === '1') {
+          throw new Error('Kordoc WebView worker missing: run scripts/achmage/prepare-kordoc-runtime.mjs first');
+        }
+        return;
+      }
+      const outDir = resolve(import.meta.dirname, 'dist/kordoc');
+      mkdirSync(outDir, { recursive: true });
+      copyFileSync(kordocWebWorker, resolve(outDir, 'engine-worker.js'));
+    },
+  };
+}
+
 function decodePath(path: string): string {
   try {
     return decodeURIComponent(path);
@@ -64,7 +95,16 @@ function decodePath(path: string): string {
 
 export default defineConfig({
   base: './',
-  plugins: [hopFontAssets()],
+  plugins: [hopFontAssets(), kordocWebWorkerAsset()],
+  build: {
+    rollupOptions: {
+      // kordoc-host.html: the hidden window that runs the document engine for the Telegram gateway.
+      input: {
+        main: resolve(import.meta.dirname, 'index.html'),
+        'kordoc-host': resolve(import.meta.dirname, 'kordoc-host.html'),
+      },
+    },
+  },
   define: {
     __APP_VERSION__: JSON.stringify(rhwpWasmPackage.version),
     __HOP_VERSION__: JSON.stringify(desktopConfig.version),

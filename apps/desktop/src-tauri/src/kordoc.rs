@@ -1,4 +1,6 @@
-//! Fixed Kordoc worker and two-phase window-owned generated-document handoff.
+//! Kordoc engine requests from the desktop side and the two-phase window-owned generated-document handoff.
+//! Document windows run the engine in their own WebView worker; the Node worker below remains only as the fallback
+//! of this test build, used when a WebView worker cannot start.
 use crate::{
     kordoc_process::{self as worker, Runtime},
     state::AppState,
@@ -111,6 +113,8 @@ const WORKER_TIMEOUT: Duration = Duration::from_secs(300);
 fn message(code: &str) -> String {
     match code {
         "runtime_missing" => "문서 생성 런타임을 찾지 못했습니다. 앱 설치 구성을 확인하세요.",
+        "worker_unavailable" => "앱에 들어 있는 문서 엔진을 시작하지 못했습니다. 앱 설치 구성을 확인하세요.",
+        "quitting" => "앱을 종료하는 중이라 문서를 만들지 않았습니다.",
         "cancelled" => "문서창이 닫혀 생성 작업을 취소했습니다.",
         "worker_timeout" => "문서 생성이 5분 안에 끝나지 않아 멈췄습니다. 다시 시도하거나 문서를 나눠 만드세요.",
         "input_limit" | "response_limit" => "문서 요청 또는 결과가 처리 크기 제한을 넘었습니다.",
@@ -189,10 +193,12 @@ pub async fn achmage_kordoc(
     .await
     .map_err(|_| message("worker_io"))?
 }
-/// Makes an HWPX for the Telegram gateway, which may run with no window: the same fixed worker,
-/// request checks and time limit as `achmage_kordoc`, one job at a time with the windows' jobs.
-/// A window's job in progress is waited for (up to two minutes) rather than throwing away the
-/// document the model just wrote. Returns the verified bytes, page count and engine warnings.
+/// Makes an HWPX for the Telegram gateway, which may run with no window: the engine window
+/// (`kordoc_host`) runs the same WebView worker as the document windows, with the same request
+/// checks and time limit, one remote job at a time. If that worker cannot start, this test build
+/// falls back to the installed Node runtime; a Node job of a window in progress is waited for (up
+/// to two minutes) rather than throwing away the document the model just wrote. Returns the
+/// verified bytes, page count and engine warnings.
 pub(crate) async fn generate_for_remote(
     app: &AppHandle,
     template: &Value,
@@ -205,7 +211,6 @@ pub(crate) async fn generate_for_remote(
         "markdown": markdown,
     });
     worker::validate_request(&input).map_err(message)?;
-    let runtime = runtime(app)?;
     let waited = Instant::now();
     let lease = loop {
         match begin(&app.state::<KordocState>(), "telegram") {
@@ -214,11 +219,23 @@ pub(crate) async fn generate_for_remote(
             Err(_) => tokio::time::sleep(Duration::from_secs(1)).await,
         }
     };
-    let reply = tauri::async_runtime::spawn_blocking(move || {
-        worker::run(&runtime, &input, &lease.cancel, WORKER_TIMEOUT).map_err(message)
-    })
-    .await
-    .map_err(|_| message("worker_io"))??;
+    let reply = match crate::kordoc_host::request(app, input.clone(), WORKER_TIMEOUT).await {
+        Err(code) if code == "worker_unavailable" => {
+            let runtime = runtime(app)?;
+            tauri::async_runtime::spawn_blocking(move || {
+                worker::run(&runtime, &input, &lease.cancel, WORKER_TIMEOUT).map_err(message)
+            })
+            .await
+            .map_err(|_| message("worker_io"))??
+        }
+        // The engine window checked the answer already; the desktop side checks it again as it would a Node line.
+        reply => {
+            let mut line = serde_json::to_vec(&reply.map_err(|code| message(&code))?)
+                .map_err(|_| message("invalid_response"))?;
+            line.push(b'\n');
+            worker::parse_response(&line, &input).map_err(message)?
+        }
+    };
     if reply["ok"] != true {
         return Err(reply["error"]["message"]
             .as_str()
@@ -290,10 +307,6 @@ pub async fn achmage_kordoc_prepare_generated(
 ) -> Result<Value, String> {
     let display_name = generated_display_name(display_name.as_deref());
     let bytes = worker::decode_verified(&hwpx_base64, &sha256).map_err(message)?;
-    let input = json!({"id":uuid::Uuid::new_v4().simple().to_string(),"op":"validate","hwpxBase64":hwpx_base64});
-    worker::validate_request(&input).map_err(message)?;
-    let runtime = runtime(&app)?;
-    let lease = begin(&state, window.label())?;
     let owner = window.label().to_owned();
     {
         let mut s = state.0.lock().map_err(|_| message("worker_io"))?;
@@ -308,30 +321,22 @@ pub async fn achmage_kordoc_prepare_generated(
         .map_err(|_| message("save_failed"))?
         .join("generated-documents");
     prune_generated(&directory, Duration::from_secs(24 * 60 * 60));
-    let expected = sha256.clone();
-    let cancel = lease.cancel.clone();
-    let (path, byte_len, lease) = tauri::async_runtime::spawn_blocking(move || {
-        let v = worker::run(&runtime, &input, &cancel, WORKER_TIMEOUT).map_err(message)?;
-        if v["ok"] != true
-            || v["result"]["validation"]["ok"] != true
-            || v["result"]["sha256"] != expected
-        {
-            return Err(message("invalid_document"));
-        }
-        if cancel.load(Ordering::SeqCst) {
-            return Err(message("cancelled"));
-        }
+    // The engine already validated the document in the window that generated it; here it must open in the editor,
+    // parsed and made editable by the same document core the new window will use.
+    let (path, byte_len) = tauri::async_runtime::spawn_blocking(move || {
+        crate::state::editable_core_from_bytes(&bytes, "invalid_document", "invalid_document")
+            .map_err(|_| message("invalid_document"))?;
         let path = worker::write_generated(
             &directory,
             &uuid::Uuid::new_v4().simple().to_string(),
             &bytes,
         )
         .map_err(message)?;
-        Ok((path, bytes.len(), lease))
+        Ok::<_, String>((path, bytes.len()))
     })
     .await
     .map_err(|_| message("worker_io"))??;
-    if lease.cancel.load(Ordering::SeqCst) || app.get_webview_window(&owner).is_none() {
+    if app.get_webview_window(&owner).is_none() {
         return Err(message("cancelled"));
     }
     let id = store_artifact(

@@ -110,7 +110,8 @@ pub fn write_generated(root: &Path, stem: &str, bytes: &[u8]) -> Result<PathBuf,
     Ok(path)
 }
 
-fn parse_response(bytes: &[u8], input: &Value) -> Result<Value, &'static str> {
+/// The checks a response line gets before the app uses it; the engine window's answers get them too.
+pub(crate) fn parse_response(bytes: &[u8], input: &Value) -> Result<Value, &'static str> {
     if bytes.len() > OUTPUT_LIMIT || !bytes.ends_with(b"\n") {
         return Err("invalid_response");
     }

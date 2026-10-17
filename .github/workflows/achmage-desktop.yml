@@ -50,6 +50,8 @@ env:
   RUST_BACKTRACE: 1
   # The Kordoc runtime ships this exact Node binary; Windows builds use the same version.
   NODE_VERSION: "24.19.0"
+  # The studio build must carry the Kordoc WebView worker that packaging built and checked (vite.config.ts).
+  HOP_REQUIRE_KORDOC_WEB: "1"
 
 jobs:
   plan:
@@ -156,7 +158,7 @@ jobs:
       - name: Test Kordoc engine
         run: pnpm --dir apps/kordoc-engine test
 
-      - name: Package Kordoc runtime (this platform's Node + engine closure, executed once)
+      - name: Package Kordoc runtime (Node worker + WebView worker from the engine closure, both executed once)
         run: node scripts/achmage/prepare-kordoc-runtime.mjs
 
       # PDF export builds rhwp natively from vendor/rhwp-native: the pinned rhwp commit with patches/rhwp applied.
@@ -210,6 +212,17 @@ jobs:
               echo "hdiutil verify could not read the image yet (attempt $attempt); retrying"; sleep $((attempt * 10))
             done
           fi
+
+      # The document engine the windows run is the WebView worker inside the app's frontend: it must be the file
+      # packaging checked against the Node worker.
+      - name: Check bundled Kordoc WebView worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(node -p "require('./apps/desktop/src-tauri/resources/kordoc-runtime.json').webWorker.sha256")"
+          actual="$(node -e "process.stdout.write(require('crypto').createHash('sha256').update(require('fs').readFileSync('apps/studio-host/dist/kordoc/engine-worker.js')).digest('hex'))")"
+          [[ "$expected" =~ ^[0-9a-f]{64}$ && "$actual" == "$expected" ]] || { echo "Bundled WebView worker differs from the packaged one"; exit 1; }
+          echo "WebView worker $actual"
 
       - name: Collect bundle
         shell: bash
